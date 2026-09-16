@@ -10,6 +10,7 @@ import { useAvailablePesticideStore } from './stores/availablePesticideStore'
 import { useRecommendSettingsStore } from './stores/recommendSettingsStore'
 import { useFarmsStore } from './stores/farmsStore'
 import { useAppPolicyStore } from './stores/appPolicyStore'
+import { useAuthStore } from './stores/authStore'
 import { useTaskNotifier } from './composables/useTaskNotifier'
 
 const store = useFarmStore()
@@ -19,6 +20,7 @@ const apStore = useAvailablePesticideStore()
 const recSettingsStore = useRecommendSettingsStore()
 const farmsStore = useFarmsStore()
 const policyStore = useAppPolicyStore()
+const authStore = useAuthStore()
 
 onMounted(() => {
   farmsStore.init()
@@ -26,6 +28,8 @@ onMounted(() => {
   policyStore.init()
   // 분류·항목(appSettings)도 모든 농장이 공유하므로 관리 모드에서도 실시간 데이터를 읽어야 한다.
   store.initAppSettings()
+  // 로그인 상태도 농장 선택과 무관하게 앱 시작 시 한 번 구독한다.
+  authStore.init()
 })
 
 // 활성 농장이 (비동기로) 정해지는 시점에 딱 한 번 농장별 데이터 스토어를 초기화한다.

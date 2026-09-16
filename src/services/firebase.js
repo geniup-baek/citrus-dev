@@ -1,4 +1,5 @@
 import { initializeApp } from 'firebase/app'
+import { getAuth } from 'firebase/auth'
 import { getFirestore } from 'firebase/firestore'
 import { getFirestore as getFirestoreLite } from 'firebase/firestore/lite'
 
@@ -15,6 +16,7 @@ export const firebaseEnabled = Object.values(config).every(Boolean)
 
 const app = firebaseEnabled ? initializeApp(config) : null
 const db = app ? getFirestore(app) : null
+const auth = app ? getAuth(app) : null
 
 // 일반 firestore(db)는 실시간 리스너(onSnapshot)를 위해 영속 스트림(Write stream)을 쓴다 —
 // 이 스트림에는 "한 번에 대기 가능한 쓰기 수" 자체에 내부 한도가 있어, writeBatch로 요청을
@@ -28,4 +30,4 @@ const db = app ? getFirestore(app) : null
 const liteApp = firebaseEnabled ? initializeApp(config, 'bulkWriteLite') : null
 const dbLite = liteApp ? getFirestoreLite(liteApp) : null
 
-export { db, dbLite }
+export { db, dbLite, auth }

@@ -77,5 +77,14 @@ service cloud.firestore {
       //   app:policy       — 전 기기 공통 정책(농약 직접등록 권한 등)
       allow read, write: if true;
     }
+    match /users/{uid} {
+      // 로그인 사용자 프로필. 이 컬렉션만 실제 인증(request.auth)을 요구한다 —
+      // 이 앱에서 처음으로 request.auth를 쓰는 규칙이다. 나머지 경로는 아직
+      // 그대로 열려 있고(농장 소유권·권한 모델이 붙는 다음 단계에서 좁힌다),
+      // 지금 로그인은 아무것도 강제하지 않는 부가 기능이라 본인 문서만 스스로
+      // 쓸 수 있게 하는 정도로 충분하다.
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == uid;
+    }
   }
 }

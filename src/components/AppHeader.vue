@@ -3,10 +3,12 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useLocaleStore } from '../stores/localeStore'
 import { useFarmsStore } from '../stores/farmsStore'
+import { useAuthStore } from '../stores/authStore'
 
 const route = useRoute()
 const localeStore = useLocaleStore()
 const farmsStore = useFarmsStore()
+const authStore = useAuthStore()
 
 const ADMIN_LINKS = [
   { to: '/resources', label: localeStore.t('nav.resources') },
@@ -66,6 +68,10 @@ watch(activePath, revealActiveLink)
           <span class="active-farm-name">{{ farmsStore.activeFarm.name }}</span>
           <button class="ghost compact-btn" type="button" @click="farmsStore.exitToSelector">농장 전환</button>
         </div>
+        <div v-if="authStore.isLoggedIn" class="auth-status">
+          <span class="muted text-sm auth-email">{{ authStore.user.email }}</span>
+          <button class="ghost compact-btn" type="button" @click="authStore.signOutUser">로그아웃</button>
+        </div>
       </div>
     </div>
 
@@ -113,6 +119,17 @@ watch(activePath, revealActiveLink)
   color: var(--primary-ink);
   font-size: 0.85rem;
 }
+.auth-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.auth-email {
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ⚠ 이 파일의 .header-top-row/.header-right 는 scoped(specificity 0,2,0)라
    style.css 의 전역 규칙(0,1,0)을 항상 이긴다 — 모바일 헤더 override 는
@@ -142,6 +159,13 @@ watch(activePath, revealActiveLink)
   .admin-badge {
     font-size: 0.75rem;
     padding: 0.15rem 0.45rem;
+  }
+  /* 좁은 화면에서는 농장뱃지(로고+이름+농장전환 버튼) + 로그인 표시(이메일+로그아웃
+     버튼)가 한 줄(nowrap)에 다 안 들어가 제목/버튼 글자가 세로로 깨진다. 로그인
+     상태·로그아웃은 농장 선택 화면(농장 전환 버튼으로 갈 수 있음)에 이미 있으니,
+     좁은 화면에서는 헤더의 로그인 표시를 아예 감춘다 — 데스크톱에서만 보인다. */
+  .auth-status {
+    display: none;
   }
 }
 </style>
