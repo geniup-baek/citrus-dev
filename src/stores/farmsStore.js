@@ -6,6 +6,7 @@ import {
 import { db, firebaseEnabled } from '../services/firebase.js'
 import { uuid } from '../utils/uuid.js'
 import { DOMAIN_KEYS } from '../utils/farmDataSchema.js'
+import { useAuthStore } from './authStore.js'
 
 const LS_ACTIVE = 'citrus:active-farm'
 const LS_MODE = 'citrus:app-mode' // '' | 'farm' | 'admin'. localStorage에 키 자체가 없으면(null) "한 번도 선택한 적 없음"으로 취급한다.
@@ -58,6 +59,7 @@ async function migrateLegacyIfNeeded() {
 }
 
 export const useFarmsStore = defineStore('farms', () => {
+  const authStore = useAuthStore()
   const allFarms = ref([]) // 삭제(휴지통 보관) 포함 전체 농장 문서
   const loading = ref(true)
   const initialized = ref(false)
@@ -132,12 +134,17 @@ export const useFarmsStore = defineStore('farms', () => {
     const trimmed = name.trim()
     if (!trimmed) return null
     const id = uuid()
+    // 만든 사람이 로그인 상태일 때만 소유자가 정해진다. 비로그인(시스템 관리 PIN)
+    // 생성은 지금까지처럼 소유자 없는 농장으로 남는다 — 아직 아무것도 강제하지 않는다.
+    const ownerUid = authStore.user?.uid || null
     await setDoc(doc(db, 'farms', id), {
       name: trimmed,
       logo,
       pin: pin.trim(),
       order: farms.value.length,
       createdAt: new Date().toISOString(),
+      ownerUid,
+      visibility: ownerUid ? 'private' : 'public',
     })
     return id
   }

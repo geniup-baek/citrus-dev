@@ -45,7 +45,9 @@ service cloud.firestore {
       allow read, write: if true;
     }
     match /farms/{farmId} {
-      // 농장 등록 정보(이름·로고) — 모든 기기에서 같은 농장 목록을 볼 수 있도록 공유.
+      // 농장 등록 정보(이름·로고·PIN·소유자) — 모든 기기에서 같은 농장 목록을 볼 수
+      // 있도록 공유. ownerUid/visibility 는 아직 기록만 하고 접근을 제한하지 않는다
+      // — 실제 강제는 멤버십/권한 단계에서 추가한다.
       allow read, write: if true;
     }
     match /farms/{farmId}/data/{docId} {

@@ -66,7 +66,7 @@ npm run preview  # 빌드 결과 미리보기
 
 | 스토어 | 범위 | Firestore 경로 | 역할 |
 |---|---|---|---|
-| `farmsStore.js` | 전역(농장 목록) | `farms/{farmId}`, 마이그레이션 플래그 `shared/appMeta` | 농장 생성/이름변경/로고/PIN/삭제(소프트)/복원, 관리모드 전환. **농장 "데이터"는 다루지 않음** |
+| `farmsStore.js` | 전역(농장 목록) | `farms/{farmId}`, 마이그레이션 플래그 `shared/appMeta` | 농장 생성/이름변경/로고/PIN/삭제(소프트)/복원, 관리모드 전환. **농장 "데이터"는 다루지 않음**. 농장 문서엔 `ownerUid`(생성자가 로그인 상태였으면 그 uid, 아니면 `null`)/`visibility`(`'private'`\|`'public'`)도 있지만, 지금은 **기록만 하고 접근을 제한하지 않음** — 규칙(`firestore.rules`)도 여전히 전체 공개 |
 | `farmStore.js` | 농장 1개 | `farms/{farmId}/data/{facilities,ancillaries,seedlings,tasks,issues,inventory,usageGuides,changeLog}` (도메인별 문서 8개, 6.1 참고) | 재배동·시설장비·묘목·작업·문제·재고·사용법·**변경이력(changeLog)**. 앱에서 가장 크고 중심적인 스토어. `farmStore.js` 자체는 배관(초기화·저장·구독)만 하고, 실제 CRUD는 `src/stores/farmStore/*.js`로 도메인별로 나뉘어 있음(6.1 참고) |
 | `treatmentStore.js` | 농장 1개 | `farms/{farmId}/treatments/{id}` | 방제이력(방제 스프레이 기록). 문서 하나가 아니라 **레코드별 컬렉션**이라 다른 스토어와 저장 방식이 다름 |
 | `availablePesticideStore.js` | 농장 1개 | `farms/{farmId}/data/availablePesticide` | "가용농약" = 구입가능 텍스트 입력 + 재고 데이터를 합쳐서 만든 실사용 가능 농약 목록 |

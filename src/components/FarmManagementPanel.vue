@@ -1,10 +1,12 @@
 <script setup>
 import { ref } from 'vue'
 import { useFarmsStore } from '../stores/farmsStore'
+import { useAuthStore } from '../stores/authStore'
 import { compressImageFile } from '../utils/imageProcessing'
 import { confirm } from '../composables/useConfirm'
 
 const farmsStore = useFarmsStore()
+const authStore = useAuthStore()
 
 const editingFarmId = ref(null)
 const farmEditName = ref('')
@@ -121,6 +123,8 @@ async function submitNewFarm() {
             {{ farm.name }}
             <span v-if="farmsStore.activeFarm?.id === farm.id" class="pill">사용 중</span>
             <span v-if="farm.pin" class="pill" title="PIN이 설정된 농장">🔒 PIN</span>
+            <span v-if="farm.ownerUid && farm.ownerUid === authStore.user?.uid" class="pill">내 농장</span>
+            <span v-else-if="farm.ownerUid" class="pill" title="다른 사용자가 소유자로 지정된 농장">소유됨</span>
           </span>
           <div class="row-actions settings-item-actions">
             <button class="ghost icon-btn" type="button" title="수정" aria-label="수정" @click="startEditFarm(farm)">✎</button>
