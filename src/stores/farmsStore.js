@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   collection, doc, getDoc, getDocs, onSnapshot, setDoc, deleteDoc, deleteField,
 } from 'firebase/firestore'
@@ -7,6 +7,7 @@ import { db, firebaseEnabled } from '../services/firebase.js'
 import { uuid } from '../utils/uuid.js'
 import { DOMAIN_KEYS } from '../utils/farmDataSchema.js'
 import { useAuthStore } from './authStore.js'
+import { canAccessFarm } from '../utils/farmAccess.js'
 
 const LS_ACTIVE = 'citrus:active-farm'
 const LS_MODE = 'citrus:app-mode' // '' | 'farm' | 'admin'. localStorage에 키 자체가 없으면(null) "한 번도 선택한 적 없음"으로 취급한다.
@@ -39,6 +40,11 @@ async function migrateLegacyIfNeeded() {
     logo: '',
     order: 0,
     createdAt: new Date().toISOString(),
+    // 이전받는 기존 농장이라 소유자가 없다 — 규칙(firestore.rules)의 소유권 강제와
+    // 어긋나지 않으려면 명시적으로 null/public을 써야 한다(필드 누락은 규칙에서
+    // 별도로 처리하긴 하지만, 새로 만드는 문서는 항상 명시하는 게 맞다).
+    ownerUid: null,
+    visibility: 'public',
   })
   await setDoc(doc(db, 'farms', farmId, 'data', 'farmData'), farmDataRest, { merge: true })
   if (appSettings && typeof appSettings === 'object') {
@@ -60,16 +66,32 @@ async function migrateLegacyIfNeeded() {
 
 export const useFarmsStore = defineStore('farms', () => {
   const authStore = useAuthStore()
-  const allFarms = ref([]) // 삭제(휴지통 보관) 포함 전체 농장 문서
-  const loading = ref(true)
+  const allFarms = ref([]) // 삭제(휴지통 보관) 포함 전체 농장 문서(접근 가능 여부 무관)
+  // 농장 목록 구독 자체의 로딩 상태. 로그인 여부가 확정되기 전엔(authStore.loading)
+  // 접근 가능한 농장을 잘못 판단할 수 있어(로그인한 사람의 농장이 일시적으로 안 보임),
+  // 아래 loading은 둘 다 끝나야 false가 된다.
+  const rawLoading = ref(true)
+  const loading = computed(() => rawLoading.value || (firebaseEnabled && authStore.loading))
   const initialized = ref(false)
   const migrationError = ref(null)
+  // 농장 관련 실시간 구독이 거부당했을 때(예: 로그아웃 경합, 소유권 변경) 채워진다.
+  // App.vue가 migrationError와 같은 자리에서 "새로고침해 주세요" 카드를 띄운다.
+  const accessError = ref(null)
+  function reportAccessError(err) {
+    console.warn('[farmsStore] 농장 데이터 접근 거부', err)
+    accessError.value = err
+  }
 
+  // firestore.rules의 소유권 판단과 반드시 같은 로직(farmAccess.js)으로 걸러낸다 —
+  // 로그인 안 했거나 남이 소유한 농장은 목록에 나타나지 않는다.
+  const accessibleFarms = computed(() =>
+    allFarms.value.filter((f) => canAccessFarm(f, { uid: authStore.user?.uid, isSuperAdmin: authStore.isSuperAdmin })),
+  )
   // 화면 전반(선택화면·헤더·라우터 등)에서 쓰는 목록은 삭제된 농장을 제외한다.
-  const farms = computed(() => allFarms.value.filter((f) => !f.deletedAt))
+  const farms = computed(() => accessibleFarms.value.filter((f) => !f.deletedAt))
   // 삭제(휴지통 보관)된 농장 — 최근 삭제 순으로 정렬. 설정의 "삭제된 농장" 섹션에서만 사용.
   const deletedFarms = computed(() =>
-    allFarms.value
+    accessibleFarms.value
       .filter((f) => f.deletedAt)
       .sort((a, b) => (b.deletedAt || '').localeCompare(a.deletedAt || '')),
   )
@@ -92,6 +114,24 @@ export const useFarmsStore = defineStore('farms', () => {
   const needsFarmCreate = computed(() => !loading.value && !migrationError.value && !isAdminMode.value && farms.value.length === 0)
   const needsFarmSelect = computed(() => !loading.value && !isAdminMode.value && farms.value.length > 0 && !activeFarm.value)
 
+  // 최초 1회 자동 연속성: 한 번도 모드를 선택한 적 없고 (내가 접근 가능한) 농장이
+  // 단 하나뿐이면 선택화면 없이 그 농장 모드로 바로 진입한다(기존 단일 농장 사용자
+  // 무중단 전환). 로그인 여부가 아직 확정 안 됐으면(loading) 접근 가능 목록이
+  // 일시적으로 불안정하므로 둘 다 끝난 뒤에만 판단한다.
+  watch(
+    () => [loading.value, farms.value.length],
+    () => {
+      if (loading.value) return
+      if (!everChosen && !modeLocal.value && farms.value.length === 1) {
+        activeFarmIdLocal.value = farms.value[0].id
+        modeLocal.value = 'farm'
+        localStorage.setItem(LS_ACTIVE, farms.value[0].id)
+        localStorage.setItem(LS_MODE, 'farm')
+      }
+    },
+    { immediate: true },
+  )
+
   async function init() {
     if (initialized.value) return
     initialized.value = true
@@ -99,7 +139,7 @@ export const useFarmsStore = defineStore('farms', () => {
     if (!firebaseEnabled || !db) {
       allFarms.value = [{ id: LOCAL_FARM_ID, name: '로컬 농장', logo: '' }]
       activeFarmIdLocal.value = LOCAL_FARM_ID
-      loading.value = false
+      rawLoading.value = false
       return
     }
 
@@ -108,26 +148,20 @@ export const useFarmsStore = defineStore('farms', () => {
     } catch (e) {
       console.warn('[farmsStore] 마이그레이션 실패', e)
       migrationError.value = e
-      loading.value = false
+      rawLoading.value = false
       return // 농장 목록 구독을 시작하지 않는다 — 불완전한 상태로 UI가 진행되지 않도록.
     }
 
-    onSnapshot(collection(db, 'farms'), (snap) => {
-      allFarms.value = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-
-      // 최초 1회 자동 연속성: 한 번도 모드를 선택한 적 없고 농장이 단 하나뿐이면
-      // 선택화면 없이 그 농장 모드로 바로 진입한다(기존 단일 농장 사용자 무중단 전환).
-      if (!everChosen && !modeLocal.value && farms.value.length === 1) {
-        activeFarmIdLocal.value = farms.value[0].id
-        modeLocal.value = 'farm'
-        localStorage.setItem(LS_ACTIVE, farms.value[0].id)
-        localStorage.setItem(LS_MODE, 'farm')
-      }
-
-      loading.value = false
-    })
+    onSnapshot(
+      collection(db, 'farms'),
+      (snap) => {
+        allFarms.value = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+        rawLoading.value = false
+      },
+      reportAccessError,
+    )
   }
 
   async function createFarm({ name, logo = '', pin = '' }) {
@@ -215,7 +249,8 @@ export const useFarmsStore = defineStore('farms', () => {
   }
 
   return {
-    farms, deletedFarms, loading, migrationError, activeFarm, isAdminMode, needsFarmCreate, needsFarmSelect,
+    farms, deletedFarms, loading, migrationError, accessError, reportAccessError,
+    activeFarm, isAdminMode, needsFarmCreate, needsFarmSelect,
     init, createFarm, renameFarm, updateFarmLogo, updateFarmPin, deleteFarm, restoreFarm, permanentlyDeleteFarm,
     selectFarm, enterAdminMode, exitToSelector,
   }

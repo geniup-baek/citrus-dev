@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { nextTick, reactive, watch } from 'vue'
 import { doc, onSnapshot, setDoc } from 'firebase/firestore'
 import { db, firebaseEnabled } from '../services/firebase.js'
+import { useFarmsStore } from './farmsStore.js'
 
 const LEGACY_LS_KEY = 'citrus:recommend-settings' // 농장 분리 이전 통합 키 (1회 이전용)
 const PREF_LS_KEY = 'citrus:recommend-prefs' // 공통(농장 무관) 동작 설정 — 기기 로컬
@@ -108,17 +109,21 @@ export const useRecommendSettingsStore = defineStore('recommendSettings', () => 
     nextTick(() => { applyingRemotePolicy = false })
 
     if (firebaseEnabled && db) {
-      onSnapshot(doc(db, 'farms', farmId, 'data', 'recommendSettings'), (snap) => {
-        applyingRemotePolicy = true
-        if (snap.exists()) {
-          Object.assign(settings, pick({ ...FARM_POLICY_DEFAULTS, ...snap.data() }, POLICY_KEYS))
-          persistPolicyLocal()
-        } else if (Object.keys(pick(legacy, POLICY_KEYS)).length) {
-          // 구버전 통합 설정에 정책값이 남아 있으면 새 농장별 문서로 1회 승격 저장한다.
-          schedulePolicyFirestoreWrite()
-        }
-        nextTick(() => { applyingRemotePolicy = false })
-      })
+      onSnapshot(
+        doc(db, 'farms', farmId, 'data', 'recommendSettings'),
+        (snap) => {
+          applyingRemotePolicy = true
+          if (snap.exists()) {
+            Object.assign(settings, pick({ ...FARM_POLICY_DEFAULTS, ...snap.data() }, POLICY_KEYS))
+            persistPolicyLocal()
+          } else if (Object.keys(pick(legacy, POLICY_KEYS)).length) {
+            // 구버전 통합 설정에 정책값이 남아 있으면 새 농장별 문서로 1회 승격 저장한다.
+            schedulePolicyFirestoreWrite()
+          }
+          nextTick(() => { applyingRemotePolicy = false })
+        },
+        (err) => useFarmsStore().reportAccessError(err),
+      )
     }
   }
 

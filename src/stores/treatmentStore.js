@@ -7,6 +7,7 @@ import {
 } from 'firebase/firestore'
 import { doc as liteDoc, collection as liteCollection, writeBatch as liteWriteBatch } from 'firebase/firestore/lite'
 import { useFarmStore } from './farmStore.js'
+import { useFarmsStore } from './farmsStore.js'
 import { diffFields, formatFieldDiff, snapshotForRevert } from '../utils/changeLogUtils.js'
 
 function treatmentLabel(record) {
@@ -48,11 +49,15 @@ export const useTreatmentStore = defineStore('treatment', () => {
 
     if (firebaseEnabled && db) {
       const q = query(collectionRef(), orderBy('date', 'desc'))
-      onSnapshot(q, (snap) => {
-        treatments.value = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        saveLS(treatments.value)
-        ready.value = true
-      })
+      onSnapshot(
+        q,
+        (snap) => {
+          treatments.value = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+          saveLS(treatments.value)
+          ready.value = true
+        },
+        (err) => useFarmsStore().reportAccessError(err),
+      )
     } else {
       try {
         const raw = localStorage.getItem(lsKey(activeFarmId))

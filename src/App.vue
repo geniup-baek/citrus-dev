@@ -68,6 +68,17 @@ useTaskNotifier(store)
       </div>
     </div>
 
+    <div v-else-if="farmsStore.accessError" class="farm-gate">
+      <div class="card farm-gate-card">
+        <h2>접근 권한이 바뀌었습니다</h2>
+        <p class="muted">
+          로그인 상태가 바뀌었거나 농장 접근 권한이 바뀌어 데이터를 계속 불러올 수 없습니다.
+          새로고침하면 최신 상태로 다시 시작합니다.
+        </p>
+        <button type="button" @click="() => window.location.reload()">새로고침</button>
+      </div>
+    </div>
+
     <FarmSelectScreen v-else-if="farmsStore.needsFarmCreate || farmsStore.needsFarmSelect" />
 
     <template v-else>

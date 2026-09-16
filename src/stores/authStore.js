@@ -6,14 +6,12 @@ import {
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut,
+  updateCurrentUser,
   updateProfile,
 } from 'firebase/auth'
 import { doc, getDoc, setDoc } from 'firebase/firestore'
-import { auth, db, firebaseEnabled } from '../services/firebase.js'
+import { auth, db, firebaseEnabled, liteAuth } from '../services/firebase.js'
 
-// 로그인 자체는 아직 아무것도 강제하지 않는 부가 기능이다(농장 접근 방식은 그대로
-// PIN 기반). users/{uid} 문서는 이후 단계(농장 소유권·권한)에서 쓸 신원의 그릇만
-// 지금 만들어 둔다 — 지금은 프로필(email/표시 이름) 저장 용도뿐이다.
 const DOC_COLLECTION = 'users'
 
 const ERROR_MESSAGES = {
@@ -30,25 +28,42 @@ function messageFor(err) {
   return ERROR_MESSAGES[err?.code] || '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'
 }
 
+// role은 여기서 절대 쓰지 않는다 — 콘솔에서 수동으로만 부여한다(firestore.rules의
+// users/{uid} update 규칙도 role 값이 그대로 유지될 때만 쓰기를 허용한다).
+// 반환값(기존 role)으로 isSuperAdmin 판단에 쓴다.
 async function ensureUserDoc(fbUser) {
-  if (!db) return
+  if (!db) return null
   const ref = doc(db, DOC_COLLECTION, fbUser.uid)
   const snap = await getDoc(ref)
   const profile = { email: fbUser.email || '', displayName: fbUser.displayName || '' }
   if (snap.exists()) {
     await setDoc(ref, profile, { merge: true })
-  } else {
-    await setDoc(ref, { ...profile, createdAt: new Date().toISOString() })
+    return snap.data()?.role || null
   }
+  await setDoc(ref, { ...profile, createdAt: new Date().toISOString() })
+  return null
 }
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref(null) // { uid, email, displayName } | null
+  const role = ref(null)
   const loading = ref(true)
   const error = ref('')
   let initialized = false
 
   const isLoggedIn = computed(() => !!user.value)
+  const isSuperAdmin = computed(() => isLoggedIn.value && role.value === 'super_admin')
+
+  // liteAuth(dbLite가 쓰는 별도 앱 인스턴스)는 자기 세션이 없다 — 메인 로그인 상태를
+  // 그대로 복사해 붙인다. firebase.js의 liteAuth 주석 참고.
+  async function syncLiteAuth(fbUser) {
+    if (!liteAuth) return
+    try {
+      await updateCurrentUser(liteAuth, fbUser || null)
+    } catch (e) {
+      console.warn('[authStore] liteAuth 동기화 실패', e)
+    }
+  }
 
   function init() {
     if (initialized) return
@@ -58,15 +73,18 @@ export const useAuthStore = defineStore('auth', () => {
       return
     }
     onAuthStateChanged(auth, async (fbUser) => {
+      await syncLiteAuth(fbUser)
       if (fbUser) {
         user.value = { uid: fbUser.uid, email: fbUser.email, displayName: fbUser.displayName }
         try {
-          await ensureUserDoc(fbUser)
+          role.value = await ensureUserDoc(fbUser)
         } catch (e) {
           console.warn('[authStore] users 문서 갱신 실패', e)
+          role.value = null
         }
       } else {
         user.value = null
+        role.value = null
       }
       loading.value = false
     })
@@ -99,6 +117,11 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = ''
     try {
       await signOut(auth)
+      // 이 앱은 상태 전환마다 항상 새로고침한다(farmsStore의 selectFarm/enterAdminMode/
+      // exitToSelector와 동일한 관례) — 로그아웃을 새로고침 없이 진행 중인 화면에서
+      // 그대로 두면, 실시간 구독이 조용히 거부되고 그 뒤의 수정이 로컬에만 남아
+      // 다음 새로고침 때 사라진다.
+      window.location.reload()
       return true
     } catch (e) {
       error.value = messageFor(e)
@@ -117,5 +140,5 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  return { user, loading, error, isLoggedIn, init, signUp, signIn, signOutUser, resetPassword }
+  return { user, role, loading, error, isLoggedIn, isSuperAdmin, init, signUp, signIn, signOutUser, resetPassword }
 })

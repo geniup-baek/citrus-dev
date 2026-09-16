@@ -29,5 +29,10 @@ const auth = app ? getAuth(app) : null
 // 오류가 난다) — 이름이 다른 별도 앱 인스턴스를 하나 더 만들어 거기에만 lite를 붙인다.
 const liteApp = firebaseEnabled ? initializeApp(config, 'bulkWriteLite') : null
 const dbLite = liteApp ? getFirestoreLite(liteApp) : null
+// liteApp은 별도 앱 인스턴스라 자기 자신의 로그인 세션이 없다(request.auth가 항상
+// null) — 소유권 규칙이 붙는 경로(방제이력)에서 이대로면 로그인 상태여도 전부
+// 거부된다. authStore가 메인 auth의 로그인 상태가 바뀔 때마다 updateCurrentUser()로
+// 같은 사용자를 이 인스턴스에도 반영한다(authStore.js 참고).
+const liteAuth = liteApp ? getAuth(liteApp) : null
 
-export { db, dbLite, auth }
+export { db, dbLite, auth, liteAuth }

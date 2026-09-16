@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { doc, onSnapshot, setDoc } from 'firebase/firestore'
 import { loadCache, pullSharedCache } from '../services/cache.js'
 import { db, firebaseEnabled } from '../services/firebase.js'
+import { useFarmsStore } from './farmsStore.js'
 import { allPesticideRecords, detailCacheKey, findToxicityInCache } from '../services/pesticide.js'
 
 const FULL_KEY    = 'pesticide:all'
@@ -152,18 +153,22 @@ export const useAvailablePesticideStore = defineStore('availablePesticide', () =
 
     if (firebaseEnabled && db) {
       const ref = doc(db, 'farms', activeFarmId, 'data', 'availablePesticide')
-      onSnapshot(ref, (snapshot) => {
-        if (snapshot.exists()) {
-          const data = snapshot.data()
-          purchaseInput.value = typeof data.purchaseInput === 'string' ? data.purchaseInput : ''
-          availableList.value = Array.isArray(data.availableList) ? data.availableList : []
-          manualMatches.value = data.manualMatches && typeof data.manualMatches === 'object' ? data.manualMatches : {}
-          persistLocal()
-        } else {
-          loadLocal()
-          persistAll()
-        }
-      })
+      onSnapshot(
+        ref,
+        (snapshot) => {
+          if (snapshot.exists()) {
+            const data = snapshot.data()
+            purchaseInput.value = typeof data.purchaseInput === 'string' ? data.purchaseInput : ''
+            availableList.value = Array.isArray(data.availableList) ? data.availableList : []
+            manualMatches.value = data.manualMatches && typeof data.manualMatches === 'object' ? data.manualMatches : {}
+            persistLocal()
+          } else {
+            loadLocal()
+            persistAll()
+          }
+        },
+        (err) => useFarmsStore().reportAccessError(err),
+      )
     } else {
       loadLocal()
     }

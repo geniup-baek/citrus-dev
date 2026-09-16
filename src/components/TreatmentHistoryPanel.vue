@@ -361,8 +361,13 @@ async function resetAllTreatments() {
   })
   if (!ok) return
   resetForm()
-  await treatStore.replaceAllTreatments([])
-  histRefreshMessage.value = `방제이력 ${n}건을 모두 삭제했습니다.`
+  try {
+    await treatStore.replaceAllTreatments([])
+    histRefreshMessage.value = `방제이력 ${n}건을 모두 삭제했습니다.`
+  } catch (e) {
+    console.warn('[TreatmentHistoryPanel] 방제이력 전체 삭제 실패', e)
+    histRefreshMessage.value = '삭제에 실패했습니다. 새로고침 후 다시 시도해 주세요.'
+  }
 }
 
 // ── 방제이력 붙여넣기 일괄추가 ─────────────────────────────────────────────────
@@ -445,6 +450,9 @@ async function importBulkTreatments() {
       bulkImportMessage.value = `${rows.length}건 추가됨 (자동 연결 ${matched}건)`
     }
     bulkPasteText.value = ''
+  } catch (e) {
+    console.warn('[TreatmentHistoryPanel] 방제이력 붙여넣기 실패', e)
+    bulkImportMessage.value = '저장에 실패했습니다. 새로고침 후 다시 시도해 주세요.'
   } finally {
     bulkImporting.value = false
   }

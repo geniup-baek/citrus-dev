@@ -20,6 +20,7 @@ import { createIssueActions } from './farmStore/issues.js'
 import { createUsageGuideActions } from './farmStore/usageGuides.js'
 import { createInventoryActions } from './farmStore/inventory.js'
 import { createBackupActions } from './farmStore/backup.js'
+import { useFarmsStore } from './farmsStore.js'
 
 // 이 파일은 스토어의 배관(초기화·저장·구독)과 각 도메인 모듈을 엮는 역할만 한다.
 // 실제 CRUD 로직은 ./farmStore/*.js에 도메인별로 나뉘어 있다 — 전체 구조는
@@ -193,9 +194,13 @@ export const useFarmStore = defineStore('farm', () => {
     appSettingsInitialized = true
     if (!firebaseEnabled || !db) return
     const appSettingsRef = doc(db, 'shared', 'appSettings')
-    appSettingsUnsub = onSnapshot(appSettingsRef, (snapshot) => {
-      state.value.appSettings = normalizeAppSettings(snapshot.exists() ? snapshot.data() : null)
-    })
+    appSettingsUnsub = onSnapshot(
+      appSettingsRef,
+      (snapshot) => {
+        state.value.appSettings = normalizeAppSettings(snapshot.exists() ? snapshot.data() : null)
+      },
+      (err) => console.warn('[farmStore] appSettings 구독 실패', err),
+    )
   }
 
   // 이 농장이 아직 신버전(도메인별) 문서로 옮겨지지 않았으면 한 번만 옮긴다.
@@ -238,26 +243,30 @@ export const useFarmStore = defineStore('farm', () => {
 
       DOMAIN_KEYS.forEach((key) => {
         const ref = doc(db, 'farms', farmId, 'data', key)
-        const unsub = onSnapshot(ref, async (snapshot) => {
-          const normalized = DOMAIN_SYNC[key](snapshot.exists() ? snapshot.data() : null)
-          state.value = { ...state.value, ...normalized }
-          persistLocal()
+        const unsub = onSnapshot(
+          ref,
+          async (snapshot) => {
+            const normalized = DOMAIN_SYNC[key](snapshot.exists() ? snapshot.data() : null)
+            state.value = { ...state.value, ...normalized }
+            persistLocal()
 
-          if (!snapshot.exists()) {
-            // ensureFarmDocumentsExist가 먼저 만들어두므로 정상 경로에선 거의 없지만,
-            // 문서가 구독 시작 이후 지워지는 등의 예외 상황에 대한 안전망이다.
-            await persist(key)
-          }
-
-          if (!firstSyncDone) {
-            loadedKeys.add(key)
-            if (loadedKeys.size === DOMAIN_KEYS.length) {
-              firstSyncDone = true
-              photoActions.resetKnownPhotoIds()
-              await photoActions.migrateInlinePhotos()
+            if (!snapshot.exists()) {
+              // ensureFarmDocumentsExist가 먼저 만들어두므로 정상 경로에선 거의 없지만,
+              // 문서가 구독 시작 이후 지워지는 등의 예외 상황에 대한 안전망이다.
+              await persist(key)
             }
-          }
-        })
+
+            if (!firstSyncDone) {
+              loadedKeys.add(key)
+              if (loadedKeys.size === DOMAIN_KEYS.length) {
+                firstSyncDone = true
+                photoActions.resetKnownPhotoIds()
+                await photoActions.migrateInlinePhotos()
+              }
+            }
+          },
+          (err) => useFarmsStore().reportAccessError(err),
+        )
         unsubscribers.push(unsub)
       })
     } else {

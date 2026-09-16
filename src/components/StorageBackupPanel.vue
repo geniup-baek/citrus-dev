@@ -49,6 +49,7 @@ const localStoragePercent = computed(() =>
 
 const firestoreLoading = ref(false)
 const firestoreUsage = ref(null) // { total, breakdown: [{ label, bytes }] }
+const firestoreUsageError = ref('')
 
 // 농장 데이터는 이제 문서 하나(farmData)가 아니라 도메인별 문서 8개로 나뉘어 있다
 // (src/utils/farmDataSchema.js의 DOMAIN_SYNC 참고) — 합쳐서 "농장 데이터" 한 항목으로 센다.
@@ -64,6 +65,7 @@ async function farmDataBytes(farmId) {
 async function refreshFirestoreUsage() {
   if (!firebaseEnabled || !db) return
   firestoreLoading.value = true
+  firestoreUsageError.value = ''
   try {
     if (farmsStore.isAdminMode) {
       const breakdown = []
@@ -129,6 +131,9 @@ async function refreshFirestoreUsage() {
     }
 
     firestoreUsage.value = { total: breakdown.reduce((s, b) => s + b.bytes, 0), breakdown }
+  } catch (e) {
+    console.warn('[StorageBackupPanel] 사용량 계산 실패', e)
+    firestoreUsageError.value = '사용량을 불러오지 못했습니다. 새로고침 후 다시 시도해 주세요.'
   } finally {
     firestoreLoading.value = false
   }
@@ -272,7 +277,15 @@ async function exportAllBackup() {
     a.click()
     a.remove()
     URL.revokeObjectURL(url)
-    adminBackupMessage.value = localeStore.t('settings.backupExported', { date: payload.exportedAt.slice(0, 10) })
+    let message = localeStore.t('settings.backupExported', { date: payload.exportedAt.slice(0, 10) })
+    const skipped = payload.skippedFarmNames ?? []
+    const failed = payload.failedFarmNames ?? []
+    if (skipped.length) message += ` (접근 권한 없어 제외됨: ${skipped.join(', ')})`
+    if (failed.length) message += ` (오류로 제외됨: ${failed.join(', ')})`
+    adminBackupMessage.value = message
+  } catch (e) {
+    console.warn('[StorageBackupPanel] 전체 백업 실패', e)
+    adminRestoreError.value = '전체 백업에 실패했습니다. 새로고침 후 다시 시도해 주세요.'
   } finally {
     adminExporting.value = false
   }
@@ -307,9 +320,15 @@ async function confirmAdminRestore() {
   if (!pendingAdminRestore.value) return
   adminRestoring.value = true
   try {
-    await restoreAllFarmsBackup(pendingAdminRestore.value.payload)
+    const result = await restoreAllFarmsBackup(pendingAdminRestore.value.payload)
     pendingAdminRestore.value = null
-    adminBackupMessage.value = localeStore.t('settings.restoreDone')
+    const failed = result?.failedFarmNames ?? []
+    adminBackupMessage.value = failed.length
+      ? `${localeStore.t('settings.restoreDone')} (실패한 농장: ${failed.join(', ')})`
+      : localeStore.t('settings.restoreDone')
+  } catch (e) {
+    console.warn('[StorageBackupPanel] 전체 복원 실패', e)
+    adminRestoreError.value = '복원 중 오류가 발생했습니다. 일부만 반영됐을 수 있습니다 — 다시 시도해 주세요.'
   } finally {
     adminRestoring.value = false
   }
@@ -353,6 +372,7 @@ async function confirmAdminRestore() {
         </ul>
       </template>
       <p v-else class="muted text-sm">확인 버튼을 누르면 조회합니다 (사진·캐시 데이터가 많으면 몇 초 걸릴 수 있습니다).</p>
+      <p v-if="firestoreUsageError" class="settings-error">{{ firestoreUsageError }}</p>
     </div>
   </div>
 

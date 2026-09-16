@@ -35,7 +35,16 @@ function handleFarmClick(farm) {
   pinError.value = ''
 }
 
+const adminAccessError = ref('')
+
 function handleAdminClick() {
+  adminAccessError.value = ''
+  // 시스템 관리는 전체 농장(다른 사람 소유 포함)을 다루므로 슈퍼관리자 로그인이
+  // 먼저 필요하다 — PIN은 그 위에 얹는 2차 확인일 뿐, PIN만으로는 더 이상 못 들어간다.
+  if (!authStore.isLoggedIn || !authStore.isSuperAdmin) {
+    adminAccessError.value = '시스템 관리는 슈퍼관리자 계정으로 로그인해야 들어갈 수 있습니다.'
+    return
+  }
   if (!ADMIN_PIN) {
     farmsStore.enterAdminMode()
     return
@@ -202,6 +211,10 @@ async function handleForgotPassword() {
             </span>
           </li>
         </ul>
+        <p v-else-if="!authStore.isLoggedIn" class="muted">
+          등록된 농장이 없거나, 로그인하지 않아 내 농장이 안 보일 수 있습니다.
+          내 농장이 있다면 먼저 로그인해 주세요.
+        </p>
         <p v-else class="muted">등록된 농장이 없습니다. 시스템 관리에서 먼저 농장을 등록해 주세요.</p>
 
         <div class="row-actions farm-auth-entry">
@@ -215,6 +228,7 @@ async function handleForgotPassword() {
         <div class="farm-admin-entry">
           <button class="ghost" type="button" @click="handleAdminClick">시스템 관리</button>
           <p class="muted text-sm">농장 등록·관리, 병해충·농약 공통 정보 갱신, 분류·항목 설정, 전체 농장 백업/복원을 관리합니다.</p>
+          <p v-if="adminAccessError" class="settings-error">{{ adminAccessError }}</p>
         </div>
       </template>
     </div>
