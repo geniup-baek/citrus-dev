@@ -1,5 +1,6 @@
 {
   "projects": {
-    "default": "citrus-collab-2026"
+    "default": "citrus-collab-2026",
+    "dev": "citrus-dev-75bea"
   }
 }
