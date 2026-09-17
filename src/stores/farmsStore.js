@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import {
   collection, doc, getDoc, getDocs, onSnapshot, setDoc, deleteDoc, deleteField, query, where,
+  writeBatch, arrayUnion, arrayRemove,
 } from 'firebase/firestore'
 import { db, firebaseEnabled } from '../services/firebase.js'
 import { uuid } from '../utils/uuid.js'
@@ -42,9 +43,8 @@ async function migrateLegacyIfNeeded() {
     order: 0,
     createdAt: new Date().toISOString(),
     // 이전받는 기존 농장이라 소유자가 없다 — 규칙(firestore.rules)의 소유권 강제와
-    // 어긋나지 않으려면 명시적으로 null/public을 써야 한다(필드 누락은 규칙에서
-    // 별도로 처리하긴 하지만, 새로 만드는 문서는 항상 명시하는 게 맞다).
-    ownerUid: null,
+    // 어긋나지 않으려면 명시적으로 public을 써야 한다(필드 누락은 규칙에서 별도로
+    // 처리하긴 하지만, 새로 만드는 문서는 항상 명시하는 게 맞다).
     visibility: 'public',
   })
   await setDoc(doc(db, 'farms', farmId, 'data', 'farmData'), farmDataRest, { merge: true })
@@ -75,7 +75,8 @@ export const useFarmsStore = defineStore('farms', () => {
   // false가 된다.
   const rawLoading = ref(true)
   const loading = computed(() =>
-    rawLoading.value || (firebaseEnabled && (authStore.loading || farmMembersStore.myFarmIdsLoading)))
+    rawLoading.value || (firebaseEnabled
+      && (authStore.loading || farmMembersStore.myFarmIdsLoading || farmMembersStore.myOwnedFarmIdsLoading)))
   const initialized = ref(false)
   const migrationError = ref(null)
   // 농장 관련 실시간 구독이 거부당했을 때(예: 로그아웃 경합, 소유권 변경) 채워진다.
@@ -91,7 +92,7 @@ export const useFarmsStore = defineStore('farms', () => {
   // 농장(farmMembersStore.myFarmIds)도 소유권과 별개로 포함시킨다.
   const accessibleFarms = computed(() =>
     allFarms.value.filter((f) =>
-      canAccessFarm(f, { uid: authStore.user?.uid, isSuperAdmin: authStore.isSuperAdmin })
+      canAccessFarm(f, { isSuperAdmin: authStore.isSuperAdmin, ownedFarmIds: farmMembersStore.myOwnedFarmIds })
       || farmMembersStore.myFarmIds.includes(f.id)),
   )
   // 화면 전반(선택화면·헤더·라우터 등)에서 쓰는 목록은 삭제된 농장을 제외한다.
@@ -178,16 +179,27 @@ export const useFarmsStore = defineStore('farms', () => {
     const id = uuid()
     // 만든 사람이 로그인 상태일 때만 소유자가 정해진다. 비로그인(시스템 관리 PIN)
     // 생성은 지금까지처럼 소유자 없는 농장으로 남는다 — 아직 아무것도 강제하지 않는다.
+    // 실제 소유자 UID는 farms/{id} 문서가 아니라 별도 서브문서(private/owner)에
+    // 적는다(전역 노출 방지, firestore.rules 참고) — 두 문서를 배치로 같이 써서
+    // 하나만 성공하는 반쪽 상태가 되지 않게 한다.
     const ownerUid = authStore.user?.uid || null
-    await setDoc(doc(db, 'farms', id), {
+    const batch = writeBatch(db)
+    batch.set(doc(db, 'farms', id), {
       name: trimmed,
       logo,
       pin: pin.trim(),
       order: farms.value.length,
       createdAt: new Date().toISOString(),
-      ownerUid,
       visibility: ownerUid ? 'private' : 'public',
     })
+    if (ownerUid) {
+      batch.set(doc(db, 'farms', id, 'private', 'owner'), { ownerUid })
+    }
+    await batch.commit()
+    if (ownerUid) {
+      await setDoc(doc(db, 'users', ownerUid), { ownedFarmIds: arrayUnion(id) }, { merge: true })
+      await farmMembersStore.refreshMyOwnedFarmIds()
+    }
     return id
   }
 
@@ -210,12 +222,31 @@ export const useFarmsStore = defineStore('farms', () => {
   // 소유권 이전(슈퍼관리자용). 빈 값이면 공개 농장으로 되돌린다. 규칙상 슈퍼관리자만
   // 이 값을 임의로 바꿀 수 있고(일반 사용자는 "1회 소유권 주장"만 가능), 이 함수를
   // 노출하는 FarmManagementPanel.vue도 슈퍼관리자만 들어올 수 있는 화면이다.
+  // 여러 문서를 순차로 쓴다(원자적 배치가 아님) — 슈퍼관리자만 쓰는 저빈도 관리
+  // 동작이라, 중간에 실패해도 재시도로 스스로 바로잡을 수 있는 수준의 위험만 남는다.
   async function updateFarmOwner(id, ownerUid) {
     const trimmed = (ownerUid || '').trim()
-    await setDoc(doc(db, 'farms', id), {
-      ownerUid: trimmed || null,
-      visibility: trimmed ? 'private' : 'public',
-    }, { merge: true })
+    const ownerRef = doc(db, 'farms', id, 'private', 'owner')
+    const prevOwnerSnap = await getDoc(ownerRef).catch(() => null)
+    const prevOwnerUid = prevOwnerSnap?.exists() ? (prevOwnerSnap.data()?.ownerUid ?? null) : null
+
+    // ⚠ 순서가 중요하다: 비공개→공개 전환 시 private/owner 서브문서를 먼저 지우면,
+    // 그 다음에 오는 visibility 수정 요청이 "지금 소유자인지"를 더 이상 증명할 수
+    // 없어(서브문서가 이미 없으므로) 거부된다(실측으로 확인) — 슈퍼관리자는
+    // isSuperAdmin() 예외로 어차피 통과하지만, 순서를 지켜 두는 게 더 견고하다.
+    // 그래서 visibility를 먼저 바꾸고, 서브문서는 그 다음에 정리한다.
+    if (trimmed) {
+      await setDoc(doc(db, 'farms', id), { visibility: 'private' }, { merge: true })
+      await setDoc(ownerRef, { ownerUid: trimmed })
+      await setDoc(doc(db, 'users', trimmed), { ownedFarmIds: arrayUnion(id) }, { merge: true }).catch(() => {})
+    } else {
+      await setDoc(doc(db, 'farms', id), { visibility: 'public' }, { merge: true })
+      await deleteDoc(ownerRef).catch(() => {})
+    }
+    if (prevOwnerUid && prevOwnerUid !== trimmed) {
+      await setDoc(doc(db, 'users', prevOwnerUid), { ownedFarmIds: arrayRemove(id) }, { merge: true }).catch(() => {})
+    }
+    await farmMembersStore.refreshMyOwnedFarmIds()
   }
 
   // 목록에서만 뺀다(휴지통 보관) — 실제 데이터(farms/{id}/data/*, treatments/*)는 그대로 남아
@@ -248,6 +279,13 @@ export const useFarmsStore = defineStore('farms', () => {
     // 확실하지 않은 걸 지우면 다른 농장이 참조 중인 사진을 지울 위험이 있다.
     const photosSnap = await getDocs(query(collection(db, 'photos'), where('farmId', '==', id)))
     await Promise.all(photosSnap.docs.map((d) => deleteDoc(d.ref)))
+    // 소유권 서브문서와, 소유자 쪽 users/{uid}.ownedFarmIds에 남은 참조도 같이 정리한다.
+    const ownerSnap = await getDoc(doc(db, 'farms', id, 'private', 'owner')).catch(() => null)
+    const ownerUid = ownerSnap?.exists() ? (ownerSnap.data()?.ownerUid ?? null) : null
+    await deleteDoc(doc(db, 'farms', id, 'private', 'owner')).catch(() => {})
+    if (ownerUid) {
+      await setDoc(doc(db, 'users', ownerUid), { ownedFarmIds: arrayRemove(id) }, { merge: true }).catch(() => {})
+    }
     await deleteDoc(doc(db, 'farms', id))
   }
 

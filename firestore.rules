@@ -26,10 +26,21 @@ service cloud.firestore {
     // 전부 data.get('key', 기본값) 형태만 쓴다 — 필드가 없을 때 대괄호 접근(d.key,
     // data[key])은 에러를 내고, 그 에러는 ||로 감싸도 상황에 따라 그대로 거부로
     // 이어질 수 있다(레거시 마이그레이션이 만드는 문서, 오래된 백업 파일처럼
-    // ownerUid/visibility 필드가 아예 없는 문서에서 실제로 걸림).
-    function ownerOf(d) { return d.get('ownerUid', null); }
-    function isPublicFarm(d) { return ownerOf(d) == null || d.get('visibility', 'private') == 'public'; }
-    function isOwner(d) { return request.auth != null && ownerOf(d) == request.auth.uid; }
+    // visibility 필드가 아예 없는 문서에서 실제로 걸림).
+    //
+    // ⚠ ownerUid(실제 Firebase UID)는 farms/{farmId} 문서엔 두지 않는다 — 그
+    // 컬렉션은 농장 선택 화면 때문에 read가 완전히 열려 있어서(아래 farms/{farmId}
+    // 주석 참고) 거기 있는 필드는 로그인조차 안 한 누구나 그대로 읽어 간다.
+    // 실제 UID는 farms/{farmId}/private/owner 서브문서로 분리해 소유자 본인·
+    // 슈퍼관리자만 읽을 수 있게 막는다. farms/{farmId} 자체엔 "지금 공개인지"만
+    // 나타내는 visibility만 남는다.
+    function isPublicFarm(d) { return d.get('visibility', 'private') == 'public'; }
+    function ownerUidOf(farmId) {
+      return exists(/databases/$(database)/documents/farms/$(farmId)/private/owner)
+        ? get(/databases/$(database)/documents/farms/$(farmId)/private/owner).data.get('ownerUid', null)
+        : null;
+    }
+    function isOwner(farmId) { return request.auth != null && ownerUidOf(farmId) == request.auth.uid; }
     function isSuperAdmin() {
       return request.auth != null
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
@@ -40,12 +51,11 @@ service cloud.firestore {
     function canAccessFarm(farmId) {
       return !exists(/databases/$(database)/documents/farms/$(farmId))
         || isPublicFarm(get(/databases/$(database)/documents/farms/$(farmId)).data)
-        || isOwner(get(/databases/$(database)/documents/farms/$(farmId)).data)
+        || isOwner(farmId)
         || isSuperAdmin();
     }
     function isOwnerOfFarm(farmId) {
-      return exists(/databases/$(database)/documents/farms/$(farmId))
-        && isOwner(get(/databases/$(database)/documents/farms/$(farmId)).data);
+      return exists(/databases/$(database)/documents/farms/$(farmId)) && isOwner(farmId);
     }
 
     // ── 농장종사자 기능별 권한 ───────────────────────────────────────────────
@@ -71,16 +81,25 @@ service cloud.firestore {
     // changeLog 는 권한 토글이 없다 — 구성원이면(멤버 문서만 있으면) 읽고 쓸 수 있다.
     // 실제 changeLog 쓰기는 각 도메인 액션의 부수효과(logChange)라, 따로 막으면
     // "데이터는 저장됐는데 이력만 안 남는" 어중간한 상태가 생긴다.
+    //
+    // ⚠ 순서가 읽기 비용에 영향을 준다: memberPermission 계열을 먼저 본다.
+    // canAccessFarm을 먼저 두면(예전 순서) — 소유자·슈퍼관리자·공개농장이 전부
+    // 아닌(가장 흔한, 제한된 권한의 농장종사자) 경우에도 매번 farms 문서 읽기 +
+    // users 문서 읽기(isSuperAdmin 판단용)를 먼저 낭비하고 나서야 진짜 답을 주는
+    // 멤버 문서 읽기로 넘어간다. 반대로 memberPermission을 먼저 두면 이 흔한
+    // 경우는 멤버 문서 읽기 1번으로 끝난다(||는 앞이 true면 뒤를 평가 안 함).
+    // 소유자·슈퍼관리자·공개농장 쪽은 대신 멤버 문서 존재확인(1회, 없으면 false)이
+    // 추가로 붙지만, 농장당 소유자는 1명뿐이라 전체적으로 더 싸다.
     function canReadFarmDomain(farmId, docId) {
-      return canAccessFarm(farmId)
+      return memberPermission(farmId, domainKeyFor(docId), 'read')
+        || memberPermission(farmId, domainKeyFor(docId), 'write')
         || (docId == 'changeLog' && isMemberOfFarm(farmId))
-        || memberPermission(farmId, domainKeyFor(docId), 'read')
-        || memberPermission(farmId, domainKeyFor(docId), 'write');
+        || canAccessFarm(farmId);
     }
     function canWriteFarmDomain(farmId, docId) {
-      return canAccessFarm(farmId)
+      return memberPermission(farmId, domainKeyFor(docId), 'write')
         || (docId == 'changeLog' && isMemberOfFarm(farmId))
-        || memberPermission(farmId, domainKeyFor(docId), 'write');
+        || canAccessFarm(farmId);
     }
 
     match /shared/farmData {
@@ -110,33 +129,52 @@ service cloud.firestore {
       allow read, write: if isSuperAdmin();
     }
     match /farms/{farmId} {
-      // 농장 등록 정보(이름·로고·PIN·소유자). read는 그대로 열어둔다 — farmsStore.js가
+      // 농장 등록 정보(이름·로고·PIN·공개여부). read는 그대로 열어둔다 — farmsStore.js가
       // 필터 없이 farms 컬렉션 전체를 구독하므로, 여기서 read를 막으면 그 구독 자체가
       // 거부되어 앱이 뜨질 못한다(목록은 클라이언트에서 소유권 기준으로 숨긴다,
-      // farmAccess.js). ⚠ 즉 이름·로고·PIN(평문)은 여전히 누구나 읽을 수 있다.
+      // farmAccess.js). ⚠ 즉 이름·로고·PIN(평문)은 여전히 누구나 읽을 수 있다 — 다만
+      // 실제 소유자 UID는 이 문서에 없다(위 "농장 소유권 강제" 섹션 설명 참고,
+      // farms/{farmId}/private/owner로 분리했다).
       allow read: if true;
-      // 만드는 사람이 로그인 상태가 아니면(ownerUid 없음) 누구나, 로그인 상태면
-      // 본인 uid로만 만들 수 있다.
-      allow create: if request.resource.data.get('ownerUid', null) == null
-        || (request.auth != null && request.resource.data.get('ownerUid', null) == request.auth.uid);
-      // 슈퍼관리자는 상태 무관하게 항상 수정 가능(소유권 이전 등). 그 외엔: 지금
-      // 공개(소유자 없음) 상태면 ownerUid를 null로 유지하는 수정(이름·로고·PIN 등,
-      // 로그인 불필요 — 지금의 PIN 기반 시스템 관리 흐름) 또는 로그인한 사람이
-      // 자신을 소유자로 지정하는 "1회 소유권 주장"까지 허용한다. 지금 소유된
-      // 상태면 소유자만.
-      // ⚠ 예전엔 isSuperAdmin()이 "지금 소유된 상태" 분기에만 있어서, 슈퍼관리자가
-      // 공개 농장을 제3자에게 배정하는(소유권 이전) 조작을 못 했다 — 여기로 끌어올려 고쳤다.
-      // ⚠ "공개 상태 유지" 조건을 isPublicFarm(request.resource.data)로 검사하면
-      // 안 된다 — isPublicFarm은 ownerUid가 null "이거나" visibility가 public이면
-      // true라서, {ownerUid: 남의uid, visibility:'public'} 같은 쓰기도 통과해 버린다
-      // (실측으로 확인 — 비로그인 상태로 남의 uid를 아무 공개 농장에 심어 넣을 수
-      // 있었음). ownerUid 자체가 null로 유지되는지를 직접 확인해야 한다.
+      // 공개(visibility: public)로 만드는 건 누구나. 비공개로 만드는 건 로그인만
+      // 있으면 된다 — 실제로 "내가 소유자로 지정되는지"는 이 문서가 아니라
+      // private/owner 서브문서의 create 규칙이 따로 검증한다(같은 배치로 같이
+      // 쓴다, farmsStore.js createFarm 참고). 그 서브문서 없이 visibility만
+      // private로 만들면 아무도(슈퍼관리자 제외) 못 건드리는 상태가 되지만,
+      // 그건 잘못된 접근을 허용하는 게 아니라 스스로 잠그는 실수라 안전하다.
+      allow create: if request.resource.data.get('visibility', 'private') == 'public'
+        || request.auth != null;
+      // 공개 유지 상태에서의 수정(이름·로고·PIN 등, 로그인 불필요 — 지금의 PIN
+      // 기반 시스템 관리 흐름) / 공개→비공개 전환(소유권 주장, 로그인만 있으면
+      // 됨 — 실제 소유자 지정은 private/owner 서브문서 create 규칙이 검증) /
+      // 비공개 상태에서의 수정(소유자만, 비공개 유지든 공개로 되돌리든 포함).
+      // 슈퍼관리자는 상태 무관하게 항상 수정 가능(소유권 이전 등).
       allow update: if isSuperAdmin()
-        || (isPublicFarm(resource.data)
-          ? (request.resource.data.get('ownerUid', null) == null
-            || (request.auth != null && request.resource.data.get('ownerUid', null) == request.auth.uid))
-          : isOwner(resource.data));
-      allow delete: if isPublicFarm(resource.data) || isOwner(resource.data) || isSuperAdmin();
+        || (resource.data.get('visibility', 'private') == 'public'
+          && request.resource.data.get('visibility', 'private') == 'public')
+        || (resource.data.get('visibility', 'private') == 'public'
+          && request.resource.data.get('visibility', 'private') == 'private'
+          && request.auth != null)
+        || (resource.data.get('visibility', 'private') == 'private' && isOwnerOfFarm(farmId));
+      allow delete: if isPublicFarm(resource.data) || isOwnerOfFarm(farmId) || isSuperAdmin();
+    }
+    match /farms/{farmId}/private/owner {
+      // 실제 소유자 UID의 단일 진실 공급원(위 "농장 소유권 강제" 섹션 참고).
+      // 소유자 본인과 슈퍼관리자만 읽을 수 있다 — 자기 문서인지는 저장된 값과
+      // 비교해서만 판단하므로(본인이면 통과, 아니면 거부), 미리 알고 있지 않아도
+      // "내가 소유자인지" 확인 자체가 가능하다(users/{uid} 자기 문서 read와 같은 패턴).
+      allow read: if isSuperAdmin()
+        || (request.auth != null && resource.data.get('ownerUid', null) == request.auth.uid);
+      // 최초 지정(생성)은 본인을 소유자로 적어 넣는 것만 허용한다 — 남을 소유자로
+      // 지정하는 건 슈퍼관리자만(제3자에게 공개 농장을 배정하는 경우).
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['ownerUid'])
+        && (request.resource.data.ownerUid == request.auth.uid || isSuperAdmin());
+      // 이미 지정된 소유권을 다른 사람으로 바꾸는(이전) 건 슈퍼관리자만.
+      allow update: if isSuperAdmin() && request.resource.data.keys().hasOnly(['ownerUid']);
+      // 공개로 되돌리는(소유권 포기) 건 본인 또는 슈퍼관리자.
+      allow delete: if isSuperAdmin()
+        || (request.auth != null && resource.data.get('ownerUid', null) == request.auth.uid);
     }
     match /farms/{farmId}/data/{docId} {
       // 농장별 데이터: farmData(재배동·작업·재고 등), availablePesticide, recommendSettings.
@@ -203,7 +241,7 @@ service cloud.firestore {
     function canAccessPhotoFarm(farmId) {
       return exists(/databases/$(database)/documents/farms/$(farmId))
         && (isPublicFarm(get(/databases/$(database)/documents/farms/$(farmId)).data)
-          || isOwner(get(/databases/$(database)/documents/farms/$(farmId)).data)
+          || isOwner(farmId)
           || isSuperAdmin()
           || isMemberOfFarm(farmId));
     }
@@ -265,10 +303,13 @@ service cloud.firestore {
       // 남이 알 수 없게 본인 문서로만 read를 좁힌다. role은 본인이 스스로 설정/
       // 변경할 수 없다(콘솔에서 수동으로만 부여) — create엔 role 필드 자체를
       // 금지하고, update는 role 값이 그대로 유지될 때만 허용한다.
+      // ⚠ update만 슈퍼관리자 예외를 둔다(get/create는 그대로 본인 전용) — 농장
+      // 소유권 이전 시 새 소유자·이전 소유자의 ownedFarmIds(아래 참고)를 슈퍼관리자가
+      // 대신 써 줘야 하기 때문. role은 이 예외로도 못 바꾼다(그대로 유지 조건 그대로).
       allow get: if request.auth != null && request.auth.uid == uid;
       allow create: if request.auth != null && request.auth.uid == uid
         && !('role' in request.resource.data);
-      allow update: if request.auth != null && request.auth.uid == uid
+      allow update: if (request.auth != null && request.auth.uid == uid || isSuperAdmin())
         && request.resource.data.get('role', null) == resource.data.get('role', null);
       allow delete: if false;
     }

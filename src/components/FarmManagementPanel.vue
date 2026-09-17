@@ -1,5 +1,7 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
+import { doc, getDoc } from 'firebase/firestore'
+import { db } from '../services/firebase'
 import { useFarmsStore } from '../stores/farmsStore'
 import { useAuthStore } from '../stores/authStore'
 import { compressImageFile } from '../utils/imageProcessing'
@@ -7,6 +9,26 @@ import { confirm } from '../composables/useConfirm'
 
 const farmsStore = useFarmsStore()
 const authStore = useAuthStore()
+
+// farms/{id} 문서엔 이제 ownerUid가 없다(전역 노출 방지, firestore.rules 참고) —
+// 이 화면은 슈퍼관리자 전용이라 private/owner 서브문서를 직접 읽어도 된다(규칙상
+// 슈퍼관리자는 항상 읽기 허용). 농장별로 1회씩 조회해 캐시한다.
+const farmOwnerUids = ref({}) // farmId -> ownerUid | null
+async function loadFarmOwner(farmId) {
+  try {
+    const snap = await getDoc(doc(db, 'farms', farmId, 'private', 'owner'))
+    farmOwnerUids.value = { ...farmOwnerUids.value, [farmId]: snap.exists() ? (snap.data()?.ownerUid ?? null) : null }
+  } catch {
+    farmOwnerUids.value = { ...farmOwnerUids.value, [farmId]: null }
+  }
+}
+watch(
+  () => farmsStore.farms.map((f) => f.id),
+  (ids) => {
+    for (const id of ids) if (!(id in farmOwnerUids.value)) loadFarmOwner(id)
+  },
+  { immediate: true },
+)
 
 const editingFarmId = ref(null)
 const farmEditName = ref('')
@@ -17,7 +39,7 @@ function startEditFarm(farm) {
   editingFarmId.value = farm.id
   farmEditName.value = farm.name
   farmEditPin.value = farm.pin || ''
-  farmEditOwnerUid.value = farm.ownerUid || ''
+  farmEditOwnerUid.value = farmOwnerUids.value[farm.id] || ''
 }
 
 function cancelEditFarm() {
@@ -31,6 +53,7 @@ async function saveFarmName(id, originalOwnerUid) {
   const nextOwnerUid = farmEditOwnerUid.value.trim()
   if (nextOwnerUid !== (originalOwnerUid || '')) {
     await farmsStore.updateFarmOwner(id, nextOwnerUid)
+    await loadFarmOwner(id)
   }
   editingFarmId.value = null
 }
@@ -109,16 +132,16 @@ async function submitNewFarm() {
     <ul class="list clean">
       <li v-for="farm in farmsStore.farms" :key="farm.id" class="list-item settings-item farm-manage-item">
         <template v-if="editingFarmId === farm.id">
-          <input v-model="farmEditName" class="settings-edit-input" type="text" placeholder="농장 이름" @keydown.enter.prevent="saveFarmName(farm.id, farm.ownerUid)" @keydown.escape.prevent="cancelEditFarm" />
-          <input v-model="farmEditPin" class="settings-edit-input" type="text" inputmode="numeric" placeholder="PIN (선택, 비우면 해제)" style="max-width: 11rem;" @keydown.enter.prevent="saveFarmName(farm.id, farm.ownerUid)" @keydown.escape.prevent="cancelEditFarm" />
-          <input v-model="farmEditOwnerUid" class="settings-edit-input" type="text" placeholder="소유자 계정 ID (비우면 공개 농장)" style="max-width: 16rem;" @keydown.enter.prevent="saveFarmName(farm.id, farm.ownerUid)" @keydown.escape.prevent="cancelEditFarm" />
+          <input v-model="farmEditName" class="settings-edit-input" type="text" placeholder="농장 이름" @keydown.enter.prevent="saveFarmName(farm.id, farmOwnerUids[farm.id])" @keydown.escape.prevent="cancelEditFarm" />
+          <input v-model="farmEditPin" class="settings-edit-input" type="text" inputmode="numeric" placeholder="PIN (선택, 비우면 해제)" style="max-width: 11rem;" @keydown.enter.prevent="saveFarmName(farm.id, farmOwnerUids[farm.id])" @keydown.escape.prevent="cancelEditFarm" />
+          <input v-model="farmEditOwnerUid" class="settings-edit-input" type="text" placeholder="소유자 계정 ID (비우면 공개 농장)" style="max-width: 16rem;" @keydown.enter.prevent="saveFarmName(farm.id, farmOwnerUids[farm.id])" @keydown.escape.prevent="cancelEditFarm" />
           <p class="muted text-sm">계정 ID는 Firebase 콘솔 → Authentication에서 이메일로 찾을 수 있습니다(이메일이 아니라 ID를 입력해야 합니다).</p>
           <label class="ghost compact-btn">
             로고 변경
             <input accept="image/*" type="file" hidden @change="(e) => handleFarmLogoChange(farm.id, e)" />
           </label>
           <div class="row-actions">
-            <button type="button" :disabled="!farmEditName.trim()" @click="saveFarmName(farm.id, farm.ownerUid)">저장</button>
+            <button type="button" :disabled="!farmEditName.trim()" @click="saveFarmName(farm.id, farmOwnerUids[farm.id])">저장</button>
             <button class="ghost" type="button" @click="cancelEditFarm">취소</button>
           </div>
         </template>
@@ -131,8 +154,8 @@ async function submitNewFarm() {
             {{ farm.name }}
             <span v-if="farmsStore.activeFarm?.id === farm.id" class="pill">사용 중</span>
             <span v-if="farm.pin" class="pill" title="PIN이 설정된 농장">🔒 PIN</span>
-            <span v-if="farm.ownerUid && farm.ownerUid === authStore.user?.uid" class="pill">내 농장</span>
-            <span v-else-if="farm.ownerUid" class="pill" title="다른 사용자가 소유자로 지정된 농장">소유됨</span>
+            <span v-if="farmOwnerUids[farm.id] && farmOwnerUids[farm.id] === authStore.user?.uid" class="pill">내 농장</span>
+            <span v-else-if="farmOwnerUids[farm.id]" class="pill" title="다른 사용자가 소유자로 지정된 농장">소유됨</span>
           </span>
           <div class="row-actions settings-item-actions">
             <button class="ghost icon-btn" type="button" title="수정" aria-label="수정" @click="startEditFarm(farm)">✎</button>
