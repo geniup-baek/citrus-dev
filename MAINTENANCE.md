@@ -278,6 +278,7 @@ src/
 ├── data/defaults.js         초기 시드 데이터, 기본 분류·항목 값
 └── i18n/messages.js         화면에 쓰이는 한국어 문자열 전체
 
-firestore.rules             ⚠️ 모든 경로 완전 개방(인증 없음)
+firestore.rules             소유권·구성원 권한으로 농장 데이터를 막음(2장 참고). photos/*·레거시
+                            전역 컬렉션 등 알고 있는 예외는 2장에 정리됨 — "완전 개방"은 아님
 .env.local                  Firebase 설정, PIS/NCPMS API 키, 관리자 PIN(모두 클라이언트에 노출됨)
 ```

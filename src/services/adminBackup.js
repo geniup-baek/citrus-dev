@@ -94,7 +94,9 @@ export async function exportAllFarmsBackup() {
       sharedCache,
       farms,
     },
-    // 백업 파일 자체에는 안 들어가고(복원 때 무시됨) 호출한 쪽이 사용자에게 보여주는 용도.
+    // 다운로드되는 백업 파일 JSON에도 그대로 포함된다(호출한 쪽이 payload 전체를
+    // JSON.stringify해서 저장함). 다만 복원(restoreAllFarmsBackup)은 이 두 필드를
+    // 읽지 않고 data만 사용하므로, 복원 동작에는 영향이 없다.
     skippedFarmNames: skipped,
     failedFarmNames: failed,
   }

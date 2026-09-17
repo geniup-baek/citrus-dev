@@ -1,6 +1,13 @@
 // firestore.rules 의 canAccessFarm/isPublicFarm/isOwner/isSuperAdmin 과 반드시 같은 논리를
 // 유지해야 한다 — 여긴 "목록에 보일지"를 판단하는 클라이언트 쪽 판단일 뿐이고, 실제 접근
 // 통제는 규칙이 한다. 규칙을 바꾸면 이 파일도 같이 바꿔야 한다.
+//
+// ⚠ 딱 한 곳은 의도적으로 규칙과 다르다: 규칙의 canAccessFarm은 "농장 문서 자체가
+// 없으면"(정리 중인 상태) 접근을 허용하지만, 여기 canAccessFarm(farm, ...)에 farm이
+// null/undefined로 들어오는 건 그 상황이 아니라 거의 항상 "아직 데이터 로딩 중"이다
+// — 그때 true를 반환하면 로딩 중 잠깐 "접근 가능"처럼 잘못 보이는 화면 깜빡임이
+// 생긴다. 그래서 여기는 false로 안전한 쪽을 택한다(어차피 이 함수가 실제 접근을
+// 막는 게 아니라 UI 표시만 판단하므로, 서버 쪽 정리 시나리오와는 무관하다).
 export function isPublicFarm(farm) {
   const ownerUid = farm?.ownerUid ?? null
   const visibility = farm?.visibility ?? 'private'

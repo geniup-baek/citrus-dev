@@ -120,14 +120,20 @@ service cloud.firestore {
       allow create: if request.resource.data.get('ownerUid', null) == null
         || (request.auth != null && request.resource.data.get('ownerUid', null) == request.auth.uid);
       // 슈퍼관리자는 상태 무관하게 항상 수정 가능(소유권 이전 등). 그 외엔: 지금
-      // 공개(소유자 없음) 상태면 공개 상태를 유지하는 수정(이름·로고·PIN 등, 로그인
-      // 불필요 — 지금의 PIN 기반 시스템 관리 흐름) 또는 로그인한 사람이 자신을 소유자로
-      // 지정하는 "1회 소유권 주장"까지 허용한다. 지금 소유된 상태면 소유자만.
+      // 공개(소유자 없음) 상태면 ownerUid를 null로 유지하는 수정(이름·로고·PIN 등,
+      // 로그인 불필요 — 지금의 PIN 기반 시스템 관리 흐름) 또는 로그인한 사람이
+      // 자신을 소유자로 지정하는 "1회 소유권 주장"까지 허용한다. 지금 소유된
+      // 상태면 소유자만.
       // ⚠ 예전엔 isSuperAdmin()이 "지금 소유된 상태" 분기에만 있어서, 슈퍼관리자가
       // 공개 농장을 제3자에게 배정하는(소유권 이전) 조작을 못 했다 — 여기로 끌어올려 고쳤다.
+      // ⚠ "공개 상태 유지" 조건을 isPublicFarm(request.resource.data)로 검사하면
+      // 안 된다 — isPublicFarm은 ownerUid가 null "이거나" visibility가 public이면
+      // true라서, {ownerUid: 남의uid, visibility:'public'} 같은 쓰기도 통과해 버린다
+      // (실측으로 확인 — 비로그인 상태로 남의 uid를 아무 공개 농장에 심어 넣을 수
+      // 있었음). ownerUid 자체가 null로 유지되는지를 직접 확인해야 한다.
       allow update: if isSuperAdmin()
         || (isPublicFarm(resource.data)
-          ? (isPublicFarm(request.resource.data)
+          ? (request.resource.data.get('ownerUid', null) == null
             || (request.auth != null && request.resource.data.get('ownerUid', null) == request.auth.uid))
           : isOwner(resource.data));
       allow delete: if isPublicFarm(resource.data) || isOwner(resource.data) || isSuperAdmin();
@@ -136,8 +142,12 @@ service cloud.firestore {
       // 농장별 데이터: farmData(재배동·작업·재고 등), availablePesticide, recommendSettings.
       // 소유자·슈퍼관리자·공개농장은 항상 전체 접근, 그 외엔 도메인별(domainKeyFor 매핑
       // 참고) 구성원 권한을 본다. delete 요청엔 request.resource 가 없어(null) 배열
-      // 길이 조건을 걸면 삭제 자체가 막힌다.
-      allow read, delete: if canReadFarmDomain(farmId, docId);
+      // 길이 조건을 걸면 삭제 자체가 막힌다 — 그렇다고 read 조건(canReadFarmDomain)을
+      // 쓰면 안 된다. ⚠ 실제로 이 실수를 했었다: 읽기 전용(write:false) 구성원이
+      // deleteDoc()을 직접 호출해 그 도메인 문서 전체(그 농장의 모든 재배동/작업 등
+      // 배열)를 지울 수 있는 상태였다 — canWriteFarmDomain으로 고쳤다.
+      allow read: if canReadFarmDomain(farmId, docId);
+      allow delete: if canWriteFarmDomain(farmId, docId);
       allow create, update: if canWriteFarmDomain(farmId, docId) && withinDomainArrayCap(docId, request.resource.data);
     }
     match /farms/{farmId}/treatments/{treatmentId} {
@@ -156,6 +166,11 @@ service cloud.firestore {
       allow read: if request.auth != null
         && (request.auth.uid == memberUid || isOwnerOfFarm(farmId) || isSuperAdmin());
       allow create: if request.auth != null && request.auth.uid == memberUid
+        // 필드를 이 5개로 제한하고 email은 로그인 토큰의 실제 이메일과 같아야 한다
+        // — 안 그러면 가입자가 자기 문서에 아무 필드나 얹거나, 남의 이메일을 자기
+        // 것처럼 적어 넣어(신뢰할 수 있는 정보처럼 보이게) 농장주를 속일 수 있다.
+        && request.resource.data.keys().hasOnly(['permissions', 'email', 'displayName', 'joinedAt', 'joinedViaCode'])
+        && request.resource.data.get('email', '') == request.auth.token.get('email', '')
         // joinedViaCode가 빈 문자열이 아님을 먼저 확인한 뒤에야 그 값으로 경로를
         // 만든다 — 빈 문자열로 exists()/get() 경로를 바로 만들면 어떻게 처리되는지
         // 불확실해(문서 경로 마지막 세그먼트가 비는 경우) 아예 그 상황 자체를 피한다.
