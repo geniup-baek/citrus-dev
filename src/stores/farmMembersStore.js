@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import {
-  collection, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, arrayUnion,
+  collection, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, arrayUnion, runTransaction,
 } from 'firebase/firestore'
 import { db, firebaseEnabled } from '../services/firebase.js'
 import { useAuthStore } from './authStore.js'
@@ -201,23 +201,42 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
 
   // ── 구성원 액션(참여) ────────────────────────────────────────────────────
   // 활성 농장 여부와 무관하게(농장 선택 화면에서) 호출된다.
+  // "코드에 claimedBy 표시" + "멤버 문서 생성"을 하나의 트랜잭션으로 묶어서, 같은
+  // 코드로 동시에 참여를 시도해도 정확히 한 명만 성공한다(Firestore 트랜잭션의
+  // 낙관적 동시성 제어 + firestore.rules의 claimedBy 체크가 같이 막아줌).
   async function joinFarmWithCode(code) {
     const uid = authStore.user?.uid
     if (!uid) throw new Error('로그인이 필요합니다.')
     const trimmed = code.trim().toUpperCase()
     if (!trimmed) throw new Error('코드를 입력해 주세요.')
-    const codeSnap = await getDoc(doc(db, 'inviteCodes', trimmed))
-    if (!codeSnap.exists()) throw new Error('유효하지 않은 코드입니다.')
-    const { farmId, permissions } = codeSnap.data()
-    await setDoc(doc(db, 'farms', farmId, 'members', uid), {
-      permissions,
-      email: authStore.user.email || '',
-      displayName: authStore.user.displayName || '',
-      joinedAt: new Date().toISOString(),
-      joinedViaCode: trimmed,
-    })
+
+    const codeRef = doc(db, 'inviteCodes', trimmed)
+    let farmId
+    try {
+      farmId = await runTransaction(db, async (transaction) => {
+        const codeSnap = await transaction.get(codeRef)
+        if (!codeSnap.exists()) throw new Error('유효하지 않은 코드입니다.')
+        const data = codeSnap.data()
+        if (data.claimedBy) throw new Error('이미 사용된 코드입니다.')
+        transaction.update(codeRef, { claimedBy: uid, claimedAt: new Date().toISOString() })
+        transaction.set(doc(db, 'farms', data.farmId, 'members', uid), {
+          permissions: data.permissions,
+          email: authStore.user.email || '',
+          displayName: authStore.user.displayName || '',
+          joinedAt: new Date().toISOString(),
+          joinedViaCode: trimmed,
+        })
+        return data.farmId
+      })
+    } catch (e) {
+      // 트랜잭션이 규칙에 막혀 거부되면(예: 경합에서 진 쪽) permission-denied로
+      // 온다 — 사용자에게는 "이미 사용됨"이 더 정확한 설명이다.
+      if (e.code === 'permission-denied') throw new Error('이미 사용된 코드입니다.')
+      throw e
+    }
+
     await updateDoc(doc(db, 'users', uid), { memberFarmIds: arrayUnion(farmId) })
-    await deleteDoc(doc(db, 'inviteCodes', trimmed)).catch(() => {})
+    await deleteDoc(codeRef).catch(() => {})
     await refreshMyFarmIds()
     return farmId
   }

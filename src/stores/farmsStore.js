@@ -207,6 +207,17 @@ export const useFarmsStore = defineStore('farms', () => {
     await setDoc(doc(db, 'farms', id), { pin: pin.trim() }, { merge: true })
   }
 
+  // 소유권 이전(슈퍼관리자용). 빈 값이면 공개 농장으로 되돌린다. 규칙상 슈퍼관리자만
+  // 이 값을 임의로 바꿀 수 있고(일반 사용자는 "1회 소유권 주장"만 가능), 이 함수를
+  // 노출하는 FarmManagementPanel.vue도 슈퍼관리자만 들어올 수 있는 화면이다.
+  async function updateFarmOwner(id, ownerUid) {
+    const trimmed = (ownerUid || '').trim()
+    await setDoc(doc(db, 'farms', id), {
+      ownerUid: trimmed || null,
+      visibility: trimmed ? 'private' : 'public',
+    }, { merge: true })
+  }
+
   // 목록에서만 뺀다(휴지통 보관) — 실제 데이터(farms/{id}/data/*, treatments/*)는 그대로 남아
   // 있어서 "삭제된 농장" 섹션에서 복원하거나 영구 삭제할 수 있다.
   async function deleteFarm(id) {
@@ -264,7 +275,7 @@ export const useFarmsStore = defineStore('farms', () => {
   return {
     farms, deletedFarms, loading, migrationError, accessError, reportAccessError,
     activeFarm, isAdminMode, needsFarmCreate, needsFarmSelect,
-    init, createFarm, renameFarm, updateFarmLogo, updateFarmPin, deleteFarm, restoreFarm, permanentlyDeleteFarm,
+    init, createFarm, renameFarm, updateFarmLogo, updateFarmPin, updateFarmOwner, deleteFarm, restoreFarm, permanentlyDeleteFarm,
     selectFarm, enterAdminMode, exitToSelector,
   }
 })
