@@ -5,8 +5,10 @@ import { deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore'
 import { doc as liteDoc, writeBatch as liteWriteBatch } from 'firebase/firestore/lite'
 import { db, dbLite, firebaseEnabled } from '../../services/firebase'
 
-// state/persist를 받아 사진 관련 함수 묶음을 만든다.
-export function createPhotoActions(state, persist) {
+// state/persist를 받아 사진 관련 함수 묶음을 만든다. getFarmId는 저장 시점의
+// 활성 농장 id를 얻는 getter — farmStore.js의 activeFarmId는 이 모듈과 별개 클로저라
+// 직접 참조가 안 돼 이렇게 주입받는다.
+export function createPhotoActions(state, persist, getFarmId = () => null) {
   const photoCache = ref({}) // id -> dataUrl (메모리 캐시)
   const photoInflight = new Set()
 
@@ -61,6 +63,7 @@ export function createPhotoActions(state, persist) {
           dataUrl: preview.dataUrl,
           contentType: preview.contentType || 'image/jpeg',
           createdAt: meta.createdAt,
+          farmId: getFarmId(),
         })
         photoCache.value = { ...photoCache.value, [preview.id]: preview.dataUrl }
         result.push(meta)
@@ -121,6 +124,7 @@ export function createPhotoActions(state, persist) {
             dataUrl: p.dataUrl,
             contentType: p.contentType || 'image/jpeg',
             createdAt: p.createdAt || new Date().toISOString(),
+            farmId: getFarmId(),
           })
           batchPhotos.push(p)
           bytes += size

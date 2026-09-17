@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import {
-  collection, doc, getDoc, getDocs, onSnapshot, setDoc, deleteDoc, deleteField,
+  collection, doc, getDoc, getDocs, onSnapshot, setDoc, deleteDoc, deleteField, query, where,
 } from 'firebase/firestore'
 import { db, firebaseEnabled } from '../services/firebase.js'
 import { uuid } from '../utils/uuid.js'
@@ -232,6 +232,11 @@ export const useFarmsStore = defineStore('farms', () => {
     )
     await deleteDoc(doc(db, 'farms', id, 'data', 'availablePesticide'))
     await deleteDoc(doc(db, 'farms', id, 'data', 'recommendSettings'))
+    // farmId가 이 농장으로 붙은(마이그레이션된) 사진도 같이 지운다. farmId가 없는
+    // (마이그레이션 안 된) 사진은 원래도 그랬듯 손대지 않는다 — 어느 농장 것인지
+    // 확실하지 않은 걸 지우면 다른 농장이 참조 중인 사진을 지울 위험이 있다.
+    const photosSnap = await getDocs(query(collection(db, 'photos'), where('farmId', '==', id)))
+    await Promise.all(photosSnap.docs.map((d) => deleteDoc(d.ref)))
     await deleteDoc(doc(db, 'farms', id))
   }
 

@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { collection, doc, getDoc, getDocs } from 'firebase/firestore'
+import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore'
 import { useFarmStore } from '../stores/farmStore'
 import { useLocaleStore } from '../stores/localeStore'
 import { useTreatmentStore } from '../stores/treatmentStore'
@@ -62,6 +62,17 @@ async function farmDataBytes(farmId) {
   return bytes
 }
 
+// farmId 필터 없이 photos 컬렉션 전체를 훑으면(농장별 소유권 규칙이 걸린 뒤로는)
+// 규칙이 거부한다 — 반드시 이 농장에 귀속된(farmId가 이 농장인) 사진만 조회한다.
+// farmId가 아직 없는(마이그레이션 안 된) 사진은 이 집계에서 빠진다 — 어차피
+// "추정치"로 표시되는 화면이라 허용 가능한 오차로 본다.
+async function farmPhotoBytes(farmId) {
+  const snap = await getDocs(query(collection(db, 'photos'), where('farmId', '==', farmId)))
+  let bytes = 0
+  snap.forEach((d) => { bytes += byteSize(d.data()) })
+  return bytes
+}
+
 async function refreshFirestoreUsage() {
   if (!firebaseEnabled || !db) return
   firestoreLoading.value = true
@@ -81,6 +92,7 @@ async function refreshFirestoreUsage() {
         }
         const treatSnap = await getDocs(collection(db, 'farms', farm.id, 'treatments'))
         treatSnap.forEach((d) => { farmBytes += byteSize(d.data()) })
+        farmBytes += await farmPhotoBytes(farm.id)
         breakdown.push({ label: `농장: ${farm.name}${farm.deletedAt ? ' (삭제됨)' : ''}`, bytes: farmBytes })
       }
 
@@ -91,7 +103,6 @@ async function refreshFirestoreUsage() {
         breakdown.push({ label, bytes: snap.exists() ? byteSize(snap.data()) : 0 })
       }
       for (const [label, colPath] of [
-        ['사진(공통)', ['photos']],
         ['공공데이터 캐시(공통, 농약·병해충 정보)', ['sharedCache']],
       ]) {
         const snap = await getDocs(collection(db, ...colPath))
@@ -121,7 +132,6 @@ async function refreshFirestoreUsage() {
 
     for (const [label, colPath] of [
       ['방제이력', ['farms', farmId, 'treatments']],
-      ['사진(공통)', ['photos']],
       ['공공데이터 캐시(공통, 농약·병해충 정보)', ['sharedCache']],
     ]) {
       const snap = await getDocs(collection(db, ...colPath))
@@ -129,6 +139,7 @@ async function refreshFirestoreUsage() {
       snap.forEach((d) => { bytes += byteSize(d.data()) })
       breakdown.push({ label, bytes })
     }
+    breakdown.push({ label: '사진', bytes: await farmPhotoBytes(farmId) })
 
     firestoreUsage.value = { total: breakdown.reduce((s, b) => s + b.bytes, 0), breakdown }
   } catch (e) {

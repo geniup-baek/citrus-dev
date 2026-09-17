@@ -26,7 +26,7 @@ export function createBackupActions(ctx) {
   const {
     state, persist, logChange,
     photoCache, currentReferencedPhotoIds, migrateInlinePhotos,
-    appSettingsLsKey, scheduleAppSettingsWrite,
+    appSettingsLsKey, scheduleAppSettingsWrite, getFarmId,
   } = ctx
 
   function exportBackup() {
@@ -174,6 +174,8 @@ export function createBackupActions(ctx) {
               dataUrl: photo.dataUrl,
               contentType: photo.contentType || 'image/jpeg',
               createdAt: photo.createdAt || new Date().toISOString(),
+              // 백업 파일 속 원래 농장이 아니라 지금 복원하는(현재) 농장으로 귀속시킨다.
+              farmId: getFarmId(),
             })
             batchEntries.push([id, photo])
             bytes += size

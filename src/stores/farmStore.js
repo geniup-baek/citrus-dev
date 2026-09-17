@@ -167,7 +167,7 @@ export const useFarmStore = defineStore('farm', () => {
   const { logChange, facilityNameById } = createChangeLogActions(state, actorName)
 
   // ── 사진 분산 저장 ───────────────────────────────────────────────────────────
-  const photoActions = createPhotoActions(state, persist)
+  const photoActions = createPhotoActions(state, persist, () => activeFarmId)
 
   function loadLocal() {
     const raw = localStorage.getItem(farmStorageKey(activeFarmId))
@@ -338,6 +338,7 @@ export const useFarmStore = defineStore('farm', () => {
     migrateInlinePhotos: photoActions.migrateInlinePhotos,
     appSettingsLsKey: APP_SETTINGS_LS_KEY,
     scheduleAppSettingsWrite,
+    getFarmId: () => activeFarmId,
   }
 
   const facilityActions = createFacilityActions(ctx)
