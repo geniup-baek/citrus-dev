@@ -4,6 +4,7 @@ import { doc, onSnapshot, setDoc } from 'firebase/firestore'
 import { loadCache, pullSharedCache } from '../services/cache.js'
 import { db, firebaseEnabled } from '../services/firebase.js'
 import { useFarmsStore } from './farmsStore.js'
+import { useFarmMembersStore } from './farmMembersStore.js'
 import { allPesticideRecords, detailCacheKey, findToxicityInCache } from '../services/pesticide.js'
 
 const FULL_KEY    = 'pesticide:all'
@@ -146,12 +147,21 @@ export const useAvailablePesticideStore = defineStore('availablePesticide', () =
     } catch {}
   }
 
-  function init(farmId) {
+  async function init(farmId) {
     if (initialized.value) return
     initialized.value = true
     activeFarmId = farmId
 
     if (firebaseEnabled && db) {
+      const farmMembersStore = useFarmMembersStore()
+      await farmMembersStore.ready()
+      // availablePesticide 문서는 별도 토글 없이 treatments 권한을 따른다(farmAccess.js
+      // domainKeyFor 참고) — 그 권한이 없는 구성원은 구독을 시도하지 않는다.
+      if (!farmMembersStore.hasFullAccess && !farmMembersStore.canRead('treatments')) {
+        loadLocal()
+        return
+      }
+      const canSeed = farmMembersStore.hasFullAccess || farmMembersStore.canWrite('treatments')
       const ref = doc(db, 'farms', activeFarmId, 'data', 'availablePesticide')
       onSnapshot(
         ref,
@@ -164,7 +174,7 @@ export const useAvailablePesticideStore = defineStore('availablePesticide', () =
             persistLocal()
           } else {
             loadLocal()
-            persistAll()
+            if (canSeed) persistAll()
           }
         },
         (err) => useFarmsStore().reportAccessError(err),

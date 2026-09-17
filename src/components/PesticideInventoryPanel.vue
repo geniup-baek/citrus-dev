@@ -11,6 +11,7 @@ import { usePesticideTypes } from '../composables/usePesticideTypes.js'
 import { useIsMobile } from '../composables/useIsMobile.js'
 import { useFarmsStore } from '../stores/farmsStore'
 import { useAppPolicyStore } from '../stores/appPolicyStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { confirmFilteredExport, downloadCsv, exportFileName, openPrintReport } from '../utils/dataExport.js'
 import { uuid } from '../utils/uuid.js'
 import PesticideLinkResults from './PesticideLinkResults.vue'
@@ -22,6 +23,7 @@ const localeStr  = useLocaleStore()
 const recSettingsStore = useRecommendSettingsStore()
 const farmsStore = useFarmsStore()
 const policyStore = useAppPolicyStore()
+const farmMembersStore = useFarmMembersStore()
 const t          = (key, p) => localeStr.t(key, p)
 
 const CATEGORY = '농약'
@@ -658,8 +660,8 @@ async function printReport() {
           <OverflowMenu v-else-if="showResetButton && summary.categoryTotal > 0" title="더보기">
             <button class="danger" type="button" @click="resetAllItems">{{ t('common.reset') }}</button>
           </OverflowMenu>
-          <button v-if="!showForm" type="button" @click="openAdd">{{ t('common.edit') }}</button>
-          <button v-else class="ghost" type="button" @click="closeForm">{{ t('common.exitEdit') }}</button>
+          <button v-if="!showForm && farmMembersStore.canWrite('inventory')" type="button" @click="openAdd">{{ t('common.edit') }}</button>
+          <button v-else-if="showForm" class="ghost" type="button" @click="closeForm">{{ t('common.exitEdit') }}</button>
         </div>
       </div>
 
@@ -726,7 +728,7 @@ async function printReport() {
 
           <div class="row-actions">
             <button :class="{ ghost: expandedId !== item.id }" type="button" @click="toggleExpand(item)">{{ t('inventory.inOut') }} {{ expandedId === item.id ? '▲' : '▼' }}</button>
-            <template v-if="showForm">
+            <template v-if="showForm && farmMembersStore.canWrite('inventory')">
               <button
                 class="ghost"
                 :class="{ 'link-btn-active': linkingItemId === item.id }"
@@ -767,7 +769,7 @@ async function printReport() {
           <div v-if="expandedId === item.id" class="log-panel">
             <div class="row-actions align-start log-history-label">
               <p class="muted" style="margin: 0;">{{ t('inventory.history') }}</p>
-              <button v-if="!showAddTxn" class="ghost compact-btn" type="button" @click="openAddTxn">{{ t('inventory.addTxnTrigger') }}</button>
+              <button v-if="!showAddTxn && farmMembersStore.canWrite('inventory')" class="ghost compact-btn" type="button" @click="openAddTxn">{{ t('inventory.addTxnTrigger') }}</button>
             </div>
 
             <form v-if="showAddTxn" class="stack-form" style="margin-bottom: 1rem;" @submit.prevent="recordTxn(item)">
@@ -835,7 +837,7 @@ async function printReport() {
                     <span class="item-meta">{{ formatTxnDate(txn.date) }}</span>
                     <span v-if="txn.note" class="muted">{{ txn.note }}</span>
                   </span>
-                  <span class="log-entry-actions">
+                  <span v-if="farmMembersStore.canWrite('inventory')" class="log-entry-actions">
                     <button class="ghost icon-btn" type="button" :title="t('common.edit')" :aria-label="t('common.edit')" @click="startEditTxn(txn)">✎</button>
                     <button class="danger icon-btn" type="button" :title="t('common.delete')" :aria-label="t('common.delete')" @click="deleteTxn(item, txn)">✕</button>
                   </span>

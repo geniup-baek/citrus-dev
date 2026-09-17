@@ -1,14 +1,16 @@
 <script setup>
 import { ref } from 'vue'
 import { useRecommendSettingsStore } from '../stores/recommendSettingsStore.js'
+import { useFarmMembersStore } from '../stores/farmMembersStore.js'
 import { TOXIC_GRADES, FISH_TOXIC_GRADES, FISH_TOXIC_INFO, formatFishToxic } from '../services/pesticide.js'
 
 const settingsStore = useRecommendSettingsStore()
+const farmMembersStore = useFarmMembersStore()
 const showFishToxicInfo = ref(false)
 </script>
 
 <template>
-  <div class="settings-card">
+  <div v-if="farmMembersStore.canWrite('treatments')" class="settings-card">
     <div class="setting-row">
       <div class="setting-label">
         <span>작용기작 중복 제한 기간</span>
@@ -104,6 +106,7 @@ const showFishToxicInfo = ref(false)
       <button class="ghost" type="button" @click="settingsStore.reset()">기본값으로 초기화</button>
     </div>
   </div>
+  <p v-else class="muted">이 설정을 변경할 권한이 없습니다.</p>
 
   <div class="settings-note">
     <p>수확 전 안전기간(PHI)은 '농약 추천' 탭에서 수확 예정일을 입력하면 자동으로 반영됩니다.</p>

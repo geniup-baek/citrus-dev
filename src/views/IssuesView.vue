@@ -4,6 +4,7 @@ import { useFarmStore } from '../stores/farmStore'
 import { useLocaleStore } from '../stores/localeStore'
 import { useRecommendSettingsStore } from '../stores/recommendSettingsStore'
 import { useAppPolicyStore } from '../stores/appPolicyStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { confirm } from '../composables/useConfirm'
 import { useIsMobile } from '../composables/useIsMobile'
 import { useLightbox } from '../composables/useLightbox'
@@ -13,6 +14,7 @@ const store = useFarmStore()
 const localeStore = useLocaleStore()
 const recSettingsStore = useRecommendSettingsStore()
 const policyStore = useAppPolicyStore()
+const farmMembersStore = useFarmMembersStore()
 const editingId = ref('')
 const showForm = ref(false)
 
@@ -353,8 +355,8 @@ clearForm()
             type="button"
             @click="resetAllIssues"
           >{{ localeStore.t('common.reset') }}</button>
-          <button v-if="!showForm" @click="showForm = true; formOpen = true">{{ localeStore.t('common.edit') }}</button>
-          <button v-else class="ghost" @click="closeForm">{{ localeStore.t('common.exitEdit') }}</button>
+          <button v-if="!showForm && farmMembersStore.canWrite('issues')" @click="showForm = true; formOpen = true">{{ localeStore.t('common.edit') }}</button>
+          <button v-else-if="showForm" class="ghost" @click="closeForm">{{ localeStore.t('common.exitEdit') }}</button>
         </div>
       </div>
       <div class="sort-filter-bar">
@@ -378,7 +380,7 @@ clearForm()
           <div class="row-actions">
             <button class="pill" :class="{ danger: issue.status !== '해결' }" :title="localeStore.t('tasks.statusChange')" @click="cycleIssueStatus(issue)">{{ issue.status }}</button>
             <button :class="{ ghost: expandedId !== issue.id }" type="button" @click="toggleLogPanel(issue)">{{ localeStore.t('issues.resolution') }} {{ expandedId === issue.id ? '▲' : '▼' }}</button>
-            <template v-if="showForm">
+            <template v-if="showForm && farmMembersStore.canWrite('issues')">
               <button :class="{ ghost: editingId !== issue.id }" @click="editIssue(issue)">{{ localeStore.t('common.edit') }}</button>
               <button class="danger" @click="confirmDeleteIssue(issue)">{{ localeStore.t('common.delete') }}</button>
             </template>
@@ -388,7 +390,7 @@ clearForm()
           <div v-if="expandedId === issue.id" class="log-panel">
             <div class="row-actions align-start log-history-label">
               <p class="muted" style="margin: 0;">{{ localeStore.t('issues.steps') }}</p>
-              <button v-if="!showAddLog" class="ghost compact-btn" type="button" @click="openAddLog">{{ localeStore.t('issues.addStepTrigger') }}</button>
+              <button v-if="!showAddLog && farmMembersStore.canWrite('issues')" class="ghost compact-btn" type="button" @click="openAddLog">{{ localeStore.t('issues.addStepTrigger') }}</button>
             </div>
 
             <form v-if="showAddLog" class="log-panel-form" @submit.prevent="recordStep(issue)">
@@ -419,7 +421,7 @@ clearForm()
                       <span class="item-meta">{{ formatStepDate(step.date) }}</span>
                       <span>{{ step.note }}</span>
                     </span>
-                    <span class="log-entry-actions">
+                    <span v-if="farmMembersStore.canWrite('issues')" class="log-entry-actions">
                       <button class="ghost icon-btn" type="button" :title="localeStore.t('common.edit')" :aria-label="localeStore.t('common.edit')" @click="startEditStep(step)">✎</button>
                       <button class="danger icon-btn" type="button" :title="localeStore.t('common.delete')" :aria-label="localeStore.t('common.delete')" @click="deleteStep(issue, step)">✕</button>
                     </span>

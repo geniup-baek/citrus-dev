@@ -4,6 +4,7 @@ import { useFarmStore } from '../stores/farmStore'
 import { useLocaleStore } from '../stores/localeStore'
 import { useRecommendSettingsStore } from '../stores/recommendSettingsStore'
 import { useAppPolicyStore } from '../stores/appPolicyStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { confirm } from '../composables/useConfirm'
 import { useIsMobile } from '../composables/useIsMobile'
 import { useLightbox } from '../composables/useLightbox'
@@ -13,6 +14,7 @@ const store = useFarmStore()
 const localeStore = useLocaleStore()
 const recSettingsStore = useRecommendSettingsStore()
 const policyStore = useAppPolicyStore()
+const farmMembersStore = useFarmMembersStore()
 
 const editingId = ref('')
 const showForm = ref(false)
@@ -336,10 +338,10 @@ async function deleteStep(guide, step) {
             type="button"
             @click="resetAllGuides"
           >{{ localeStore.t('common.reset') }}</button>
-          <button class="ghost" type="button" @click="triggerImport">{{ localeStore.t('usageGuides.importFile') }}</button>
+          <button v-if="farmMembersStore.canWrite('usageGuides')" class="ghost" type="button" @click="triggerImport">{{ localeStore.t('usageGuides.importFile') }}</button>
           <input ref="importInput" accept="application/json,.json" type="file" style="display: none;" @change="handleImportFile" />
-          <button v-if="!showForm" @click="openAdd">{{ localeStore.t('common.edit') }}</button>
-          <button v-else class="ghost" @click="closeForm">{{ localeStore.t('common.exitEdit') }}</button>
+          <button v-if="!showForm && farmMembersStore.canWrite('usageGuides')" @click="openAdd">{{ localeStore.t('common.edit') }}</button>
+          <button v-else-if="showForm" class="ghost" @click="closeForm">{{ localeStore.t('common.exitEdit') }}</button>
         </div>
       </div>
       <p v-if="importMessage" class="muted text-sm">{{ importMessage }}</p>
@@ -360,10 +362,12 @@ async function deleteStep(guide, step) {
             <button :class="{ ghost: expandedId !== guide.id }" type="button" @click="toggleStepPanel(guide)">{{ localeStore.t('usageGuides.steps') }} {{ expandedId === guide.id ? '▲' : '▼' }}</button>
             <template v-if="showForm">
               <button class="ghost" type="button" @click="exportGuide(guide)">{{ localeStore.t('usageGuides.exportFile') }}</button>
-              <button class="ghost" :disabled="i === 0" @click="moveGuide(i, -1)">{{ localeStore.t('common.moveUp') }}</button>
-              <button class="ghost" :disabled="i === store.state.usageGuides.length - 1" @click="moveGuide(i, 1)">{{ localeStore.t('common.moveDown') }}</button>
-              <button :class="{ ghost: editingId !== guide.id }" @click="editGuide(guide)">{{ localeStore.t('common.edit') }}</button>
-              <button class="danger" @click="confirmDeleteGuide(guide)">{{ localeStore.t('common.delete') }}</button>
+              <template v-if="farmMembersStore.canWrite('usageGuides')">
+                <button class="ghost" :disabled="i === 0" @click="moveGuide(i, -1)">{{ localeStore.t('common.moveUp') }}</button>
+                <button class="ghost" :disabled="i === store.state.usageGuides.length - 1" @click="moveGuide(i, 1)">{{ localeStore.t('common.moveDown') }}</button>
+                <button :class="{ ghost: editingId !== guide.id }" @click="editGuide(guide)">{{ localeStore.t('common.edit') }}</button>
+                <button class="danger" @click="confirmDeleteGuide(guide)">{{ localeStore.t('common.delete') }}</button>
+              </template>
             </template>
           </div>
 
@@ -371,7 +375,7 @@ async function deleteStep(guide, step) {
           <div v-if="expandedId === guide.id" class="log-panel">
             <div class="row-actions align-start log-history-label">
               <p class="muted" style="margin: 0;">{{ localeStore.t('usageGuides.steps') }}</p>
-              <span class="row-actions">
+              <span v-if="farmMembersStore.canWrite('usageGuides')" class="row-actions">
                 <button v-if="stepEditMode && !showAddStep" class="ghost compact-btn" type="button" @click="openAddStep">{{ localeStore.t('usageGuides.addStepTrigger') }}</button>
                 <button v-if="!stepEditMode" class="ghost compact-btn" type="button" @click="stepEditMode = true">{{ localeStore.t('common.edit') }}</button>
                 <button v-else class="ghost compact-btn" type="button" @click="exitStepEditMode">{{ localeStore.t('common.exitEdit') }}</button>

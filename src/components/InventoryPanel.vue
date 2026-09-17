@@ -8,6 +8,7 @@ import { confirm } from '../composables/useConfirm'
 import { useIsMobile } from '../composables/useIsMobile'
 import { useFarmsStore } from '../stores/farmsStore'
 import { useAppPolicyStore } from '../stores/appPolicyStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { downloadCsv, exportFileName, openPrintReport } from '../utils/dataExport.js'
 import MobileFilterBar from './MobileFilterBar.vue'
 import OverflowMenu from './OverflowMenu.vue'
@@ -17,6 +18,7 @@ const farmsStore = useFarmsStore()
 const localeStore = useLocaleStore()
 const recSettingsStore = useRecommendSettingsStore()
 const policyStore = useAppPolicyStore()
+const farmMembersStore = useFarmMembersStore()
 
 const { isMobile } = useIsMobile()
 
@@ -418,8 +420,8 @@ clearForm()
           <OverflowMenu v-else-if="showResetButton && summary.total > 0" title="더보기">
             <button class="danger" type="button" @click="resetAllItems">{{ localeStore.t('common.reset') }}</button>
           </OverflowMenu>
-          <button v-if="!showForm" type="button" @click="openAdd">{{ localeStore.t('common.edit') }}</button>
-          <button v-else class="ghost" type="button" @click="closeForm">{{ localeStore.t('common.exitEdit') }}</button>
+          <button v-if="!showForm && farmMembersStore.canWrite('inventory')" type="button" @click="openAdd">{{ localeStore.t('common.edit') }}</button>
+          <button v-else-if="showForm" class="ghost" type="button" @click="closeForm">{{ localeStore.t('common.exitEdit') }}</button>
         </div>
       </div>
 
@@ -466,7 +468,7 @@ clearForm()
 
           <div class="row-actions">
             <button :class="{ ghost: expandedId !== item.id }" type="button" @click="toggleExpand(item)">{{ localeStore.t('inventory.inOut') }} {{ expandedId === item.id ? '▲' : '▼' }}</button>
-            <template v-if="showForm">
+            <template v-if="showForm && farmMembersStore.canWrite('inventory')">
               <button :class="{ ghost: editingId !== item.id }" type="button" @click="editItem(item)">{{ localeStore.t('common.edit') }}</button>
               <button class="danger" type="button" @click="deleteItem(item)">{{ localeStore.t('common.delete') }}</button>
             </template>
@@ -476,7 +478,7 @@ clearForm()
           <div v-if="expandedId === item.id" class="log-panel">
             <div class="row-actions align-start log-history-label">
               <p class="muted" style="margin: 0;">{{ localeStore.t('inventory.history') }}</p>
-              <button v-if="!showAddTxn" class="ghost compact-btn" type="button" @click="openAddTxn">{{ localeStore.t('inventory.addTxnTrigger') }}</button>
+              <button v-if="!showAddTxn && farmMembersStore.canWrite('inventory')" class="ghost compact-btn" type="button" @click="openAddTxn">{{ localeStore.t('inventory.addTxnTrigger') }}</button>
             </div>
 
             <form v-if="showAddTxn" class="stack-form" style="margin-bottom: 1rem;" @submit.prevent="recordTxn(item)">
@@ -516,7 +518,7 @@ clearForm()
                     <span class="item-meta">{{ formatTxnDate(txn.date) }}</span>
                     <span v-if="txn.note" class="muted">{{ txn.note }}</span>
                   </span>
-                  <span class="log-entry-actions">
+                  <span v-if="farmMembersStore.canWrite('inventory')" class="log-entry-actions">
                     <button class="ghost icon-btn" type="button" :title="localeStore.t('common.edit')" :aria-label="localeStore.t('common.edit')" @click="startEditTxn(txn)">✎</button>
                     <button class="danger icon-btn" type="button" :title="localeStore.t('common.delete')" :aria-label="localeStore.t('common.delete')" @click="deleteTxn(item, txn)">✕</button>
                   </span>

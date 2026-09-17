@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useLocaleStore } from '../stores/localeStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import FacilitiesPanel from '../components/FacilitiesPanel.vue'
 import AncillaryPanel from '../components/AncillaryPanel.vue'
 import SeedlingsPanel from '../components/SeedlingsPanel.vue'
@@ -10,9 +11,18 @@ import UsageGuidePanel from '../components/UsageGuidePanel.vue'
 
 const localeStore = useLocaleStore()
 const route = useRoute()
+const farmMembersStore = useFarmMembersStore()
 
-const TAB_KEYS = ['facilities', 'ancillary', 'seedlings', 'inventory', 'usageGuides']
-const activeTab = ref(TAB_KEYS.includes(route.query.tab) ? route.query.tab : 'facilities')
+// 탭 키 -> 권한 도메인 키(대부분 같지만 ancillary만 ancillaries로 다르다).
+const TAB_DOMAINS = {
+  facilities: 'facilities', ancillary: 'ancillaries', seedlings: 'seedlings',
+  inventory: 'inventory', usageGuides: 'usageGuides',
+}
+const TAB_KEYS = Object.keys(TAB_DOMAINS)
+const readableTabs = () => TAB_KEYS.filter((key) => farmMembersStore.canRead(TAB_DOMAINS[key]))
+
+const initialTab = TAB_KEYS.includes(route.query.tab) ? route.query.tab : 'facilities'
+const activeTab = ref(farmMembersStore.canRead(TAB_DOMAINS[initialTab]) ? initialTab : (readableTabs()[0] || initialTab))
 
 // 재배동 목록에서 '묘목 보기'를 선택하면 묘목 탭으로 이동해 해당 재배동으로 필터링한다.
 const pendingGreenhouseId = ref('')
@@ -30,11 +40,11 @@ function viewSeedlingsFor(greenhouseId) {
     </div>
 
     <div class="tab-bar">
-      <button class="tab-btn" :class="{ active: activeTab === 'facilities' }" @click="activeTab = 'facilities'">{{ localeStore.t('nav.facilities') }}</button>
-      <button class="tab-btn" :class="{ active: activeTab === 'ancillary' }" @click="activeTab = 'ancillary'">{{ localeStore.t('nav.ancillary') }}</button>
-      <button class="tab-btn" :class="{ active: activeTab === 'seedlings' }" @click="activeTab = 'seedlings'">{{ localeStore.t('nav.seedlings') }}</button>
-      <button class="tab-btn" :class="{ active: activeTab === 'inventory' }" @click="activeTab = 'inventory'">{{ localeStore.t('nav.inventory') }}</button>
-      <button class="tab-btn" :class="{ active: activeTab === 'usageGuides' }" @click="activeTab = 'usageGuides'">{{ localeStore.t('nav.usageGuides') }}</button>
+      <button v-if="farmMembersStore.canRead('facilities')" class="tab-btn" :class="{ active: activeTab === 'facilities' }" @click="activeTab = 'facilities'">{{ localeStore.t('nav.facilities') }}</button>
+      <button v-if="farmMembersStore.canRead('ancillaries')" class="tab-btn" :class="{ active: activeTab === 'ancillary' }" @click="activeTab = 'ancillary'">{{ localeStore.t('nav.ancillary') }}</button>
+      <button v-if="farmMembersStore.canRead('seedlings')" class="tab-btn" :class="{ active: activeTab === 'seedlings' }" @click="activeTab = 'seedlings'">{{ localeStore.t('nav.seedlings') }}</button>
+      <button v-if="farmMembersStore.canRead('inventory')" class="tab-btn" :class="{ active: activeTab === 'inventory' }" @click="activeTab = 'inventory'">{{ localeStore.t('nav.inventory') }}</button>
+      <button v-if="farmMembersStore.canRead('usageGuides')" class="tab-btn" :class="{ active: activeTab === 'usageGuides' }" @click="activeTab = 'usageGuides'">{{ localeStore.t('nav.usageGuides') }}</button>
     </div>
 
     <FacilitiesPanel v-if="activeTab === 'facilities'" @view-seedlings="viewSeedlingsFor" />

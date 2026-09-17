@@ -21,6 +21,7 @@ import { useFarmStore } from '../stores/farmStore'
 import { useLocaleStore } from '../stores/localeStore'
 import { useRecommendSettingsStore } from '../stores/recommendSettingsStore'
 import { useAppPolicyStore } from '../stores/appPolicyStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { confirm } from '../composables/useConfirm'
 import { useIsMobile } from '../composables/useIsMobile'
 import { useLightbox } from '../composables/useLightbox'
@@ -35,6 +36,7 @@ const store = useFarmStore()
 const localeStore = useLocaleStore()
 const recSettingsStore = useRecommendSettingsStore()
 const policyStore = useAppPolicyStore()
+const farmMembersStore = useFarmMembersStore()
 const route = useRoute()
 
 // 초기화 버튼 — 시스템 관리 모드에서 기능을 "사용"으로 켜고, 이 농장에서 "표시"로 켠 경우에만 노출한다.
@@ -708,8 +710,8 @@ form.category = taskCategories.value[0] ?? ''
             <button class="seg-btn" :class="{ active: viewMode === 'list' }" type="button" @click="viewMode = 'list'">목록</button>
             <button class="seg-btn" :class="{ active: viewMode === 'calendar' }" type="button" @click="viewMode = 'calendar'">캘린더</button>
           </div>
-          <button v-if="!showForm" @click="showForm = true; formOpen = true">{{ localeStore.t('common.edit') }}</button>
-          <button v-else class="ghost" @click="exitEdit">{{ localeStore.t('common.exitEdit') }}</button>
+          <button v-if="!showForm && farmMembersStore.canWrite('tasks')" @click="showForm = true; formOpen = true">{{ localeStore.t('common.edit') }}</button>
+          <button v-else-if="showForm" class="ghost" @click="exitEdit">{{ localeStore.t('common.exitEdit') }}</button>
         </div>
       </div>
 
@@ -795,7 +797,7 @@ form.category = taskCategories.value[0] ?? ''
                 <template v-if="task.checklist?.length">({{ checklistDone(task) }}/{{ task.checklist.length }})</template>
                 {{ checklistTaskId === task.id ? '▲' : '▼' }}
               </button>
-              <template v-if="showForm">
+              <template v-if="showForm && farmMembersStore.canWrite('tasks')">
                 <button :class="{ ghost: !(rightPanel === 'detail' && selectedTaskId === task.id) }" @click="openDetail(task.id)">상세</button>
                 <button class="danger" @click="confirmDeleteTask(task)">{{ localeStore.t('common.delete') }}</button>
               </template>
@@ -806,6 +808,7 @@ form.category = taskCategories.value[0] ?? ''
               <div class="row-actions align-start log-history-label">
                 <p class="muted" style="margin: 0;">{{ localeStore.t('tasks.checklist') }}</p>
                 <button
+                  v-if="farmMembersStore.canWrite('tasks')"
                   class="ghost compact-btn"
                   type="button"
                   @click="toggleChecklistEditMode"
@@ -846,7 +849,7 @@ form.category = taskCategories.value[0] ?? ''
             <div v-if="expandedTaskId === task.id" class="log-panel">
               <div class="row-actions align-start log-history-label">
                 <p class="muted" style="margin: 0;">{{ localeStore.t('tasks.logHistory') }}</p>
-                <button v-if="!showAddLog" class="ghost compact-btn" type="button" @click="openAddLog">{{ localeStore.t('tasks.addLogTrigger') }}</button>
+                <button v-if="!showAddLog && farmMembersStore.canWrite('tasks')" class="ghost compact-btn" type="button" @click="openAddLog">{{ localeStore.t('tasks.addLogTrigger') }}</button>
               </div>
 
               <form v-if="showAddLog" class="stack-form" style="margin-bottom: 1rem;" @submit.prevent="updateProgress">
@@ -880,7 +883,7 @@ form.category = taskCategories.value[0] ?? ''
                       <span class="log-entry-info">
                         <span class="item-meta">{{ formatLogDate(log.date) }}</span>
                       </span>
-                      <span class="log-entry-actions">
+                      <span v-if="farmMembersStore.canWrite('tasks')" class="log-entry-actions">
                         <button class="ghost icon-btn" type="button" :title="localeStore.t('common.edit')" :aria-label="localeStore.t('common.edit')" @click="startEditLog(log)">✎</button>
                         <button class="danger icon-btn" type="button" :title="localeStore.t('common.delete')" :aria-label="localeStore.t('common.delete')" @click="deleteLog(log)">✕</button>
                       </span>
@@ -991,7 +994,7 @@ form.category = taskCategories.value[0] ?? ''
               <p class="item-meta">{{ task.category }}</p>
               <div class="row-actions">
                 <button :class="statusClass(task.status)" :title="localeStore.t('tasks.statusChange')" @click="cycleStatus(task)">{{ task.status }}</button>
-                <template v-if="showForm">
+                <template v-if="showForm && farmMembersStore.canWrite('tasks')">
                   <button :class="{ ghost: !(rightPanel === 'detail' && selectedTaskId === task.id) }" @click="openDetail(task.id)">상세</button>
                   <button class="danger" @click="confirmDeleteTask(task)">{{ localeStore.t('common.delete') }}</button>
                 </template>

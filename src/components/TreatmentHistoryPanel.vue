@@ -12,6 +12,7 @@ import { useLocaleStore } from '../stores/localeStore'
 import { confirm } from '../composables/useConfirm'
 import { useFarmsStore } from '../stores/farmsStore'
 import { useAppPolicyStore } from '../stores/appPolicyStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { confirmFilteredExport, downloadCsv, exportFileName, openPrintReport, today } from '../utils/dataExport.js'
 import { categoryClass } from '../utils/pesticideBadgeClass.js'
 import PesticideLinkResults from './PesticideLinkResults.vue'
@@ -24,6 +25,7 @@ const farmStore     = useFarmStore()
 const localeStore   = useLocaleStore()
 const farmsStore    = useFarmsStore()
 const policyStore   = useAppPolicyStore()
+const farmMembersStore = useFarmMembersStore()
 const { isMobile } = useIsMobile()
 const { resolveType: normCat } = usePesticideTypes()
 const { inventoryPesticides } = usePesticideInventoryStock()
@@ -487,8 +489,8 @@ function formatDate(d) {
             <button class="ghost" type="button" @click="printTreatments">{{ localeStore.t('inventory.printReport') }}</button>
             <button class="ghost" type="button" @click="downloadTreatmentsCsv">{{ localeStore.t('inventory.downloadReport') }}</button>
           </OverflowMenu>
-          <button v-if="!showHistoryForm" type="button" @click="showHistoryForm = true">{{ localeStore.t('common.edit') }}</button>
-          <button v-else class="ghost" type="button" @click="resetForm(); showHistoryForm = false; histRefreshMessage = ''">{{ localeStore.t('common.exitEdit') }}</button>
+          <button v-if="!showHistoryForm && farmMembersStore.canWrite('treatments')" type="button" @click="showHistoryForm = true">{{ localeStore.t('common.edit') }}</button>
+          <button v-else-if="showHistoryForm" class="ghost" type="button" @click="resetForm(); showHistoryForm = false; histRefreshMessage = ''">{{ localeStore.t('common.exitEdit') }}</button>
         </div>
       </div>
       <p v-if="histRefreshMessage" class="muted text-sm" style="margin: -0.4rem 0 0.6rem;">{{ histRefreshMessage }}</p>
@@ -550,7 +552,7 @@ function formatDate(d) {
               <p v-if="t.memo" class="item-meta muted">{{ t.memo }}</p>
             </div>
             <div class="row-actions">
-              <template v-if="showHistoryForm">
+              <template v-if="showHistoryForm && farmMembersStore.canWrite('treatments')">
                 <button
                   class="ghost"
                   :class="{ 'link-btn-active': histLinkId === t.id }"

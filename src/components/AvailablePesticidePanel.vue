@@ -14,6 +14,7 @@ import { useLocaleStore } from '../stores/localeStore'
 import { confirm } from '../composables/useConfirm'
 import { useFarmsStore } from '../stores/farmsStore'
 import { useAppPolicyStore } from '../stores/appPolicyStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { confirmFilteredExport, downloadCsv, exportFileName, openPrintReport, today } from '../utils/dataExport.js'
 import { categoryClass, toxicClass, fishToxicClass } from '../utils/pesticideBadgeClass.js'
 import PesticideLinkResults from './PesticideLinkResults.vue'
@@ -25,6 +26,7 @@ const apStore       = useAvailablePesticideStore()
 const localeStore   = useLocaleStore()
 const farmsStore    = useFarmsStore()
 const policyStore   = useAppPolicyStore()
+const farmMembersStore = useFarmMembersStore()
 const { resolveType: normCat, typeNames: pesticideTypes } = usePesticideTypes()
 const { inventoryPesticides, inventoryStockMap, inStockPesticides, stockLotLabel } = usePesticideInventoryStock()
 const { isMobile } = useIsMobile()
@@ -468,8 +470,8 @@ watch(() => apStore.purchaseInput, (v) => { apInputText.value = v }, { immediate
           <button class="ghost" type="button" @click="printApList">{{ localeStore.t('inventory.printReport') }}</button>
           <button class="ghost" type="button" @click="downloadApListCsv">{{ localeStore.t('inventory.downloadReport') }}</button>
         </OverflowMenu>
-        <button v-if="!apEditMode" type="button" @click="apEditMode = true">{{ localeStore.t('common.edit') }}</button>
-        <button v-else class="ghost" type="button" @click="closeApEdit">{{ localeStore.t('common.exitEdit') }}</button>
+        <button v-if="!apEditMode && farmMembersStore.canWrite('treatments')" type="button" @click="apEditMode = true">{{ localeStore.t('common.edit') }}</button>
+        <button v-else-if="apEditMode" class="ghost" type="button" @click="closeApEdit">{{ localeStore.t('common.exitEdit') }}</button>
       </div>
     </div>
     <p v-if="apRefreshMessage" class="muted text-sm" style="margin: -0.4rem 0 0.6rem;">{{ apRefreshMessage }}</p>
@@ -566,7 +568,7 @@ watch(() => apStore.purchaseInput, (v) => { apInputText.value = v }, { immediate
           </div>
 
           <!-- 카드 액션 -->
-          <div v-if="apEditMode" class="ap-card-actions">
+          <div v-if="apEditMode && farmMembersStore.canWrite('treatments')" class="ap-card-actions">
             <button
               class="ghost"
               :class="{ 'link-btn-active': matchingItemId === item.id }"

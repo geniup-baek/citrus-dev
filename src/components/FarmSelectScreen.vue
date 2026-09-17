@@ -2,9 +2,11 @@
 import { ref } from 'vue'
 import { useFarmsStore } from '../stores/farmsStore'
 import { useAuthStore } from '../stores/authStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 
 const farmsStore = useFarmsStore()
 const authStore = useAuthStore()
+const farmMembersStore = useFarmMembersStore()
 
 // 시스템 관리 PIN은 화면에서 설정하지 않는다 — 개발 머신의 .env.local(VITE_ADMIN_PIN)
 // 또는 배포 시 GitHub Actions secret으로만 지정한다. 비어 있으면 PIN 없이 바로 진입한다.
@@ -120,6 +122,32 @@ async function handleForgotPassword() {
   const ok = await authStore.resetPassword(email)
   if (ok) authMessage.value = '비밀번호 재설정 메일을 보냈습니다.'
 }
+
+// ── 초대 코드로 농장 참여 ───────────────────────────────────────────────────
+const showJoinForm = ref(false)
+const joinCodeInput = ref('')
+const joinSubmitting = ref(false)
+const joinError = ref('')
+
+function openJoinForm() {
+  showJoinForm.value = true
+  joinCodeInput.value = ''
+  joinError.value = ''
+}
+
+async function submitJoinCode() {
+  if (joinSubmitting.value) return
+  joinError.value = ''
+  joinSubmitting.value = true
+  try {
+    const farmId = await farmMembersStore.joinFarmWithCode(joinCodeInput.value)
+    farmsStore.selectFarm(farmId)
+  } catch (e) {
+    joinError.value = e.message || '참여에 실패했습니다.'
+  } finally {
+    joinSubmitting.value = false
+  }
+}
 </script>
 
 <template>
@@ -190,6 +218,29 @@ async function handleForgotPassword() {
         </div>
       </template>
 
+      <template v-else-if="showJoinForm">
+        <h2>농장 참여</h2>
+        <p class="muted">농장주에게 받은 초대 코드를 입력하면, 그 코드에 담긴 권한 그대로 농장에 합류합니다.</p>
+        <div class="stack-form">
+          <label>초대 코드
+            <input
+              v-model="joinCodeInput"
+              type="text"
+              autofocus
+              placeholder="예: AB23CD45"
+              @keydown.enter.prevent="submitJoinCode"
+            />
+          </label>
+          <p v-if="joinError" class="settings-error">{{ joinError }}</p>
+          <div class="row-actions">
+            <button type="button" :disabled="joinSubmitting || !joinCodeInput.trim()" @click="submitJoinCode">
+              {{ joinSubmitting ? '참여하는 중...' : '참여' }}
+            </button>
+            <button class="ghost" type="button" @click="showJoinForm = false">취소</button>
+          </div>
+        </div>
+      </template>
+
       <template v-else>
         <h2>농장 선택</h2>
         <p class="muted">작업할 농장을 선택하세요. 농장마다 재배동·작업·재고·방제이력이 독립적으로 관리됩니다.</p>
@@ -221,6 +272,7 @@ async function handleForgotPassword() {
           <template v-if="authStore.isLoggedIn">
             <span class="muted text-sm">로그인됨: {{ authStore.user.email }}</span>
             <button class="ghost compact-btn" type="button" @click="handleLogout">로그아웃</button>
+            <button class="ghost compact-btn" type="button" @click="openJoinForm">초대 코드로 참여</button>
           </template>
           <button v-else class="ghost compact-btn" type="button" @click="openAuthForm('login')">로그인</button>
         </div>

@@ -7,6 +7,7 @@ import { db, firebaseEnabled } from '../services/firebase.js'
 import { uuid } from '../utils/uuid.js'
 import { DOMAIN_KEYS } from '../utils/farmDataSchema.js'
 import { useAuthStore } from './authStore.js'
+import { useFarmMembersStore } from './farmMembersStore.js'
 import { canAccessFarm } from '../utils/farmAccess.js'
 
 const LS_ACTIVE = 'citrus:active-farm'
@@ -66,12 +67,15 @@ async function migrateLegacyIfNeeded() {
 
 export const useFarmsStore = defineStore('farms', () => {
   const authStore = useAuthStore()
+  const farmMembersStore = useFarmMembersStore()
   const allFarms = ref([]) // 삭제(휴지통 보관) 포함 전체 농장 문서(접근 가능 여부 무관)
-  // 농장 목록 구독 자체의 로딩 상태. 로그인 여부가 확정되기 전엔(authStore.loading)
-  // 접근 가능한 농장을 잘못 판단할 수 있어(로그인한 사람의 농장이 일시적으로 안 보임),
-  // 아래 loading은 둘 다 끝나야 false가 된다.
+  // 농장 목록 구독 자체의 로딩 상태. 로그인 여부·구성원 자격이 확정되기 전엔
+  // (authStore.loading / farmMembersStore.myFarmIdsLoading) 접근 가능한 농장을
+  // 잘못 판단할 수 있어(내 농장이 일시적으로 안 보임), 아래 loading은 셋 다 끝나야
+  // false가 된다.
   const rawLoading = ref(true)
-  const loading = computed(() => rawLoading.value || (firebaseEnabled && authStore.loading))
+  const loading = computed(() =>
+    rawLoading.value || (firebaseEnabled && (authStore.loading || farmMembersStore.myFarmIdsLoading)))
   const initialized = ref(false)
   const migrationError = ref(null)
   // 농장 관련 실시간 구독이 거부당했을 때(예: 로그아웃 경합, 소유권 변경) 채워진다.
@@ -83,9 +87,12 @@ export const useFarmsStore = defineStore('farms', () => {
   }
 
   // firestore.rules의 소유권 판단과 반드시 같은 로직(farmAccess.js)으로 걸러낸다 —
-  // 로그인 안 했거나 남이 소유한 농장은 목록에 나타나지 않는다.
+  // 로그인 안 했거나 남이 소유한 농장은 목록에 나타나지 않는다. 구성원으로 합류한
+  // 농장(farmMembersStore.myFarmIds)도 소유권과 별개로 포함시킨다.
   const accessibleFarms = computed(() =>
-    allFarms.value.filter((f) => canAccessFarm(f, { uid: authStore.user?.uid, isSuperAdmin: authStore.isSuperAdmin })),
+    allFarms.value.filter((f) =>
+      canAccessFarm(f, { uid: authStore.user?.uid, isSuperAdmin: authStore.isSuperAdmin })
+      || farmMembersStore.myFarmIds.includes(f.id)),
   )
   // 화면 전반(선택화면·헤더·라우터 등)에서 쓰는 목록은 삭제된 농장을 제외한다.
   const farms = computed(() => accessibleFarms.value.filter((f) => !f.deletedAt))
@@ -135,6 +142,7 @@ export const useFarmsStore = defineStore('farms', () => {
   async function init() {
     if (initialized.value) return
     initialized.value = true
+    farmMembersStore.initGlobal()
 
     if (!firebaseEnabled || !db) {
       allFarms.value = [{ id: LOCAL_FARM_ID, name: '로컬 농장', logo: '' }]

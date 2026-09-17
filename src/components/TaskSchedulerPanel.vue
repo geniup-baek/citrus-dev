@@ -6,10 +6,12 @@ import { reactive, ref, computed } from 'vue'
 import { format } from 'date-fns'
 import { useFarmStore } from '../stores/farmStore'
 import { useLocaleStore } from '../stores/localeStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { confirm } from '../composables/useConfirm'
 
 const store = useFarmStore()
 const localeStore = useLocaleStore()
+const farmMembersStore = useFarmMembersStore()
 
 const taskCategories = computed(() => store.state.appSettings?.taskCategories ?? ['기타'])
 const scheduleRules = computed(() => store.state.scheduleRules)
@@ -138,7 +140,7 @@ clearSchedulerForm()
         </p>
         <p class="muted text-sm">{{ rule.startDate }} ~ {{ rule.endDate || localeStore.t('common.ongoing') }}</p>
       </div>
-      <div class="row-actions">
+      <div v-if="farmMembersStore.canWrite('tasks')" class="row-actions">
         <button class="ghost" type="button" @click="editSchedulerRule(rule)">{{ localeStore.t('common.edit') }}</button>
         <button class="danger" type="button" @click="confirmDeleteScheduleRule(rule)">{{ localeStore.t('common.delete') }}</button>
       </div>
@@ -147,6 +149,7 @@ clearSchedulerForm()
   </ul>
 
   <!-- 규칙 추가/편집 폼 -->
+  <template v-if="farmMembersStore.canWrite('tasks')">
   <h3 class="section-title">{{ schedulerEditingId ? localeStore.t('tasks.updateRule') : localeStore.t('tasks.saveRule') }}</h3>
   <form class="stack-form" @submit.prevent="saveScheduleRule">
     <label>{{ localeStore.t('tasks.ruleTitle') }}
@@ -194,4 +197,5 @@ clearSchedulerForm()
       <button v-if="schedulerEditingId" class="ghost" type="button" @click="clearSchedulerForm">{{ localeStore.t('common.cancel') }}</button>
     </div>
   </form>
+  </template>
 </template>

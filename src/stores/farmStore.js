@@ -21,6 +21,7 @@ import { createUsageGuideActions } from './farmStore/usageGuides.js'
 import { createInventoryActions } from './farmStore/inventory.js'
 import { createBackupActions } from './farmStore/backup.js'
 import { useFarmsStore } from './farmsStore.js'
+import { useFarmMembersStore } from './farmMembersStore.js'
 
 // 이 파일은 스토어의 배관(초기화·저장·구독)과 각 도메인 모듈을 엮는 역할만 한다.
 // 실제 CRUD 로직은 ./farmStore/*.js에 도메인별로 나뉘어 있다 — 전체 구조는
@@ -233,15 +234,38 @@ export const useFarmStore = defineStore('farm', () => {
     activeFarmId = farmId
 
     if (firebaseEnabled && db) {
-      await ensureFarmDocumentsExist(farmId)
+      const farmMembersStore = useFarmMembersStore()
+      // 권한이 제한된 구성원은 자기 권한 확인(farmMembersStore.ready())이 끝날
+      // 때까지 기다린 뒤, 읽기 권한이 있는 도메인만 구독한다 — 그러지 않으면
+      // 권한 없는 도메인 구독이 전부 거부되어 read-only 구성원이 애초에 볼 수
+      // 있는 도메인조차 못 불러온다(문서 시딩도 마찬가지 이유로 건너뜀).
+      await farmMembersStore.ready()
+      const readableKeys = farmMembersStore.hasFullAccess
+        ? DOMAIN_KEYS
+        : DOMAIN_KEYS.filter((key) => farmMembersStore.canRead(key))
 
-      // 신버전 문서 8개를 각각 구독한다. 최초 로드 때 전부 한 번씩 도착한 뒤에야
-      // "사진 참조 스냅샷 기준점 잡기 + 인라인 사진 이전"을 한 번 수행한다
-      // (하나만 보고 판단하면 아직 안 들어온 다른 문서의 사진 참조를 놓칠 수 있다).
+      // 구독하지 않는(=읽을 권한이 없는) 도메인은 state의 기본 예시 데이터(신규 농장
+      // 시연용 샘플)가 그대로 남아있게 된다 — 대시보드처럼 권한과 무관하게 항상 보이는
+      // 화면에서 "가짜 데이터가 실제인 것처럼" 보이면 안 되므로 빈 배열로 비운다.
+      if (readableKeys.length < DOMAIN_KEYS.length) {
+        const emptyOverrides = {}
+        DOMAIN_KEYS.filter((key) => !readableKeys.includes(key)).forEach((key) => { emptyOverrides[key] = [] })
+        state.value = { ...state.value, ...emptyOverrides }
+      }
+
+      if (farmMembersStore.hasFullAccess) {
+        await ensureFarmDocumentsExist(farmId)
+      }
+
+      // 신버전 문서들을 각각 구독한다. 최초 로드 때 (읽기 권한이 있는 것) 전부 한 번씩
+      // 도착한 뒤에야 "사진 참조 스냅샷 기준점 잡기 + 인라인 사진 이전"을 한 번
+      // 수행한다(하나만 보고 판단하면 아직 안 들어온 다른 문서의 사진 참조를 놓칠 수
+      // 있다). 권한이 제한된 구성원은 이 하우스키핑을 건너뛴다 — 농장을 처음
+      // 준비하는 소유자·슈퍼관리자의 몫이다.
       const loadedKeys = new Set()
-      let firstSyncDone = false
+      let firstSyncDone = readableKeys.length === 0 || !farmMembersStore.hasFullAccess
 
-      DOMAIN_KEYS.forEach((key) => {
+      readableKeys.forEach((key) => {
         const ref = doc(db, 'farms', farmId, 'data', key)
         const unsub = onSnapshot(
           ref,
@@ -250,15 +274,16 @@ export const useFarmStore = defineStore('farm', () => {
             state.value = { ...state.value, ...normalized }
             persistLocal()
 
-            if (!snapshot.exists()) {
+            if (!snapshot.exists() && farmMembersStore.canWrite(key)) {
               // ensureFarmDocumentsExist가 먼저 만들어두므로 정상 경로에선 거의 없지만,
-              // 문서가 구독 시작 이후 지워지는 등의 예외 상황에 대한 안전망이다.
+              // 문서가 구독 시작 이후 지워지는 등의 예외 상황에 대한 안전망이다. 쓰기
+              // 권한이 없으면 이 자가치유 쓰기도 거부되므로 시도하지 않는다.
               await persist(key)
             }
 
             if (!firstSyncDone) {
               loadedKeys.add(key)
-              if (loadedKeys.size === DOMAIN_KEYS.length) {
+              if (loadedKeys.size === readableKeys.length) {
                 firstSyncDone = true
                 photoActions.resetKnownPhotoIds()
                 await photoActions.migrateInlinePhotos()

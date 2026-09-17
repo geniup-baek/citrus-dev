@@ -4,6 +4,7 @@ import { useFarmStore } from '../stores/farmStore'
 import { useLocaleStore } from '../stores/localeStore'
 import { useRecommendSettingsStore } from '../stores/recommendSettingsStore'
 import { useAppPolicyStore } from '../stores/appPolicyStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { confirm } from '../composables/useConfirm'
 import { useIsMobile } from '../composables/useIsMobile'
 import { useLightbox } from '../composables/useLightbox'
@@ -13,6 +14,7 @@ const store = useFarmStore()
 const localeStore = useLocaleStore()
 const recSettingsStore = useRecommendSettingsStore()
 const policyStore = useAppPolicyStore()
+const farmMembersStore = useFarmMembersStore()
 const editingId = ref('')
 const showForm = ref(false)
 
@@ -183,8 +185,8 @@ async function saveAncillary() {
     <article>
       <div class="pip-header">
         <div class="pip-actions">
-          <button v-if="!showForm" @click="openAdd">{{ localeStore.t('common.edit') }}</button>
-          <template v-else>
+          <button v-if="!showForm && farmMembersStore.canWrite('ancillaries')" @click="openAdd">{{ localeStore.t('common.edit') }}</button>
+          <template v-else-if="showForm">
             <button
               v-if="showResetButton && store.state.ancillaries.length > 0"
               class="danger"
@@ -219,8 +221,8 @@ async function saveAncillary() {
           <div v-if="showForm" class="row-actions">
             <button class="ghost" :disabled="i === 0" @click="moveAncillary(i, -1)">{{ localeStore.t('common.moveUp') }}</button>
             <button class="ghost" :disabled="i === store.state.ancillaries.length - 1" @click="moveAncillary(i, 1)">{{ localeStore.t('common.moveDown') }}</button>
-            <button :class="{ ghost: editingId !== item.id }" @click="editAncillary(item)">{{ localeStore.t('common.edit') }}</button>
-            <button class="danger" @click="confirmDeleteAncillary(item)">{{ localeStore.t('common.delete') }}</button>
+            <button v-if="farmMembersStore.canWrite('ancillaries')" :class="{ ghost: editingId !== item.id }" @click="editAncillary(item)">{{ localeStore.t('common.edit') }}</button>
+            <button v-if="farmMembersStore.canWrite('ancillaries')" class="danger" @click="confirmDeleteAncillary(item)">{{ localeStore.t('common.delete') }}</button>
           </div>
           <div :id="`anc-form-slot-${item.id}`" class="mobile-form-slot"></div>
         </li>

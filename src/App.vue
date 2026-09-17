@@ -9,6 +9,7 @@ import { useTreatmentStore } from './stores/treatmentStore'
 import { useAvailablePesticideStore } from './stores/availablePesticideStore'
 import { useRecommendSettingsStore } from './stores/recommendSettingsStore'
 import { useFarmsStore } from './stores/farmsStore'
+import { useFarmMembersStore } from './stores/farmMembersStore'
 import { useAppPolicyStore } from './stores/appPolicyStore'
 import { useAuthStore } from './stores/authStore'
 import { useTaskNotifier } from './composables/useTaskNotifier'
@@ -19,6 +20,7 @@ const treatStore = useTreatmentStore()
 const apStore = useAvailablePesticideStore()
 const recSettingsStore = useRecommendSettingsStore()
 const farmsStore = useFarmsStore()
+const farmMembersStore = useFarmMembersStore()
 const policyStore = useAppPolicyStore()
 const authStore = useAuthStore()
 
@@ -38,6 +40,9 @@ watch(
   () => farmsStore.activeFarm?.id,
   (farmId) => {
     if (!farmId) return
+    // farmMembersStore를 먼저 초기화해야 한다 — 아래 스토어들이 도메인별 구독
+    // 여부를 결정할 때 farmMembersStore.canRead()/ready()를 참조한다.
+    farmMembersStore.init(farmId, farmsStore.activeFarm)
     store.init(farmId)
     treatStore.init(farmId)
     apStore.init(farmId)

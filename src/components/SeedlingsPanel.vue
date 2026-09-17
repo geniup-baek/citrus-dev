@@ -5,6 +5,7 @@ import { useFarmStore } from '../stores/farmStore'
 import { useLocaleStore } from '../stores/localeStore'
 import { useRecommendSettingsStore } from '../stores/recommendSettingsStore'
 import { useAppPolicyStore } from '../stores/appPolicyStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { confirm } from '../composables/useConfirm'
 import { useIsMobile } from '../composables/useIsMobile'
 import { useLightbox } from '../composables/useLightbox'
@@ -21,6 +22,7 @@ const store = useFarmStore()
 const localeStore = useLocaleStore()
 const recSettingsStore = useRecommendSettingsStore()
 const policyStore = useAppPolicyStore()
+const farmMembersStore = useFarmMembersStore()
 const editingId = ref('')
 const showForm = ref(false)
 
@@ -494,8 +496,8 @@ clearForm()
     <article>
       <div class="pip-header">
         <div class="pip-actions">
-          <button v-if="!showForm" @click="openAdd">{{ localeStore.t('common.edit') }}</button>
-          <template v-else>
+          <button v-if="!showForm && farmMembersStore.canWrite('seedlings')" @click="openAdd">{{ localeStore.t('common.edit') }}</button>
+          <template v-else-if="showForm">
             <OverflowMenu v-if="showResetButton && store.state.seedlings.length > 0" title="더보기">
               <button class="danger" type="button" @click="resetAllSeedlings">{{ localeStore.t('common.reset') }}</button>
             </OverflowMenu>
@@ -548,7 +550,7 @@ clearForm()
           </div>
           <div class="row-actions">
             <button :class="{ ghost: expandedId !== seedling.id }" type="button" @click="toggleLogPanel(seedling)">{{ localeStore.t('seedlings.growthLog') }} {{ expandedId === seedling.id ? '▲' : '▼' }}</button>
-            <template v-if="showForm">
+            <template v-if="showForm && farmMembersStore.canWrite('seedlings')">
               <button :class="{ ghost: editingId !== seedling.id }" @click="editSeedling(seedling)">{{ localeStore.t('common.edit') }}</button>
               <button class="danger" @click="confirmDeleteSeedling(seedling)">{{ localeStore.t('common.delete') }}</button>
             </template>
@@ -558,7 +560,7 @@ clearForm()
           <div v-if="expandedId === seedling.id" class="log-panel">
             <div class="row-actions align-start log-history-label">
               <p class="muted" style="margin: 0;">{{ localeStore.t('seedlings.growthHistory') }}</p>
-              <button v-if="!showAddLog" class="ghost compact-btn" type="button" @click="openAddLog">{{ localeStore.t('seedlings.addLogTrigger') }}</button>
+              <button v-if="!showAddLog && farmMembersStore.canWrite('seedlings')" class="ghost compact-btn" type="button" @click="openAddLog">{{ localeStore.t('seedlings.addLogTrigger') }}</button>
             </div>
 
             <form v-if="showAddLog" class="stack-form" style="margin-bottom: 1rem;" @submit.prevent="recordLog(seedling)">
@@ -592,7 +594,7 @@ clearForm()
                     <span class="log-entry-info">
                       <span class="item-meta">{{ formatLogDate(log.date) }}</span>
                     </span>
-                    <span class="log-entry-actions">
+                    <span v-if="farmMembersStore.canWrite('seedlings')" class="log-entry-actions">
                       <button class="ghost icon-btn" type="button" :title="localeStore.t('common.edit')" :aria-label="localeStore.t('common.edit')" @click="startEditLog(log)">✎</button>
                       <button class="danger icon-btn" type="button" :title="localeStore.t('common.delete')" :aria-label="localeStore.t('common.delete')" @click="deleteLog(seedling, log)">✕</button>
                     </span>

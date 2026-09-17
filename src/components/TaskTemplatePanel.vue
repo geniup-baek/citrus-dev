@@ -6,9 +6,11 @@
 import { ref, computed } from 'vue'
 import { useFarmStore } from '../stores/farmStore'
 import { useLocaleStore } from '../stores/localeStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 
 const store = useFarmStore()
 const localeStore = useLocaleStore()
+const farmMembersStore = useFarmMembersStore()
 const emit = defineEmits(['created'])
 
 const SEASONS = [
@@ -53,7 +55,7 @@ async function createFromTemplate(tpl) {
           </div>
           <p class="item-meta text-sm">{{ tpl.recommendedMonth }}월 · {{ tpl.notes }}</p>
         </div>
-        <button class="ghost" type="button" style="white-space: nowrap; flex-shrink: 0;" @click="createFromTemplate(tpl)">
+        <button v-if="farmMembersStore.canWrite('tasks')" class="ghost" type="button" style="white-space: nowrap; flex-shrink: 0;" @click="createFromTemplate(tpl)">
           {{ localeStore.t('tasks.create') }}
         </button>
       </li>

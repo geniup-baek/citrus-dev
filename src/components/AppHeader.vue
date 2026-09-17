@@ -4,16 +4,27 @@ import { RouterLink, useRoute } from 'vue-router'
 import { useLocaleStore } from '../stores/localeStore'
 import { useFarmsStore } from '../stores/farmsStore'
 import { useAuthStore } from '../stores/authStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
+import { ROUTE_DOMAINS } from '../utils/farmAccess'
 
 const route = useRoute()
 const localeStore = useLocaleStore()
 const farmsStore = useFarmsStore()
 const authStore = useAuthStore()
+const farmMembersStore = useFarmMembersStore()
 
 const ADMIN_LINKS = [
   { to: '/resources', label: localeStore.t('nav.resources') },
   { to: '/settings', label: localeStore.t('settings.title') },
 ]
+
+// 구성원인데 그 라우트가 다루는 도메인 전부에 읽기 권한이 없으면 링크를 숨긴다
+// (소유자·슈퍼관리자·공개농장이면 ROUTE_DOMAINS 여부와 무관하게 항상 통과).
+function canSeeLink(path) {
+  const domains = ROUTE_DOMAINS[path]
+  if (!domains) return true
+  return domains.some((domain) => farmMembersStore.canRead(domain))
+}
 
 const links = computed(() => {
   if (farmsStore.isAdminMode) return ADMIN_LINKS
@@ -25,7 +36,7 @@ const links = computed(() => {
     { to: '/issues', label: localeStore.t('nav.issues') },
     { to: '/resources', label: localeStore.t('nav.resources') },
     { to: '/settings', label: localeStore.t('settings.title') },
-  ]
+  ].filter((link) => canSeeLink(link.to))
 })
 
 const activePath = computed(() => route.path)

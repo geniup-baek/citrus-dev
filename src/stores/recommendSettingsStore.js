@@ -3,6 +3,7 @@ import { nextTick, reactive, watch } from 'vue'
 import { doc, onSnapshot, setDoc } from 'firebase/firestore'
 import { db, firebaseEnabled } from '../services/firebase.js'
 import { useFarmsStore } from './farmsStore.js'
+import { useFarmMembersStore } from './farmMembersStore.js'
 
 const LEGACY_LS_KEY = 'citrus:recommend-settings' // 농장 분리 이전 통합 키 (1회 이전용)
 const PREF_LS_KEY = 'citrus:recommend-prefs' // 공통(농장 무관) 동작 설정 — 기기 로컬
@@ -96,7 +97,7 @@ export const useRecommendSettingsStore = defineStore('recommendSettings', () => 
     schedulePolicyFirestoreWrite()
   }, { deep: true })
 
-  function init(farmId) {
+  async function init(farmId) {
     if (initialized) return
     initialized = true
     activeFarmId = farmId
@@ -109,6 +110,11 @@ export const useRecommendSettingsStore = defineStore('recommendSettings', () => 
     nextTick(() => { applyingRemotePolicy = false })
 
     if (firebaseEnabled && db) {
+      const farmMembersStore = useFarmMembersStore()
+      await farmMembersStore.ready()
+      // recommendSettings 문서도 별도 토글 없이 treatments 권한을 따른다 — 그 권한이
+      // 없는 구성원은 구독을 시도하지 않고 로컬 기본값(위에서 이미 반영됨)으로 둔다.
+      if (!farmMembersStore.hasFullAccess && !farmMembersStore.canRead('treatments')) return
       onSnapshot(
         doc(db, 'farms', farmId, 'data', 'recommendSettings'),
         (snap) => {

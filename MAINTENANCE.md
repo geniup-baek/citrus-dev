@@ -25,7 +25,8 @@
 
 이 앱을 유지보수하기 전에 반드시 이해해야 하는 구조적 전제입니다. Firebase Auth(이메일/비밀번호)와 농장 소유권 강제가 도입되어 있지만, **일부 컬렉션은 여전히 의도적으로 전체 공개**입니다 — 어디까지 막혀 있고 어디는 아직 아닌지 구분해서 이해해야 합니다.
 
-- **`farms/{farmId}`와 그 하위(`data/*`, `treatments/*`)는 소유권으로 막혀 있습니다.** `ownerUid`가 없거나(`null`) `visibility`가 `'public'`인 농장은 누구나 읽고 쓸 수 있고, `ownerUid`가 있는 농장은 그 소유자와 슈퍼관리자(`users/{uid}.role == 'super_admin'`)만 접근할 수 있습니다. 규칙 로직은 `firestore.rules`에, 클라이언트 쪽 같은 판단은 `src/utils/farmAccess.js`에 있고 **둘은 반드시 같은 논리를 유지해야 합니다.**
+- **`farms/{farmId}`와 그 하위(`data/*`, `treatments/*`)는 소유권 + 구성원 권한으로 막혀 있습니다.** `ownerUid`가 없거나(`null`) `visibility`가 `'public'`인 농장은 누구나 읽고 쓸 수 있고, `ownerUid`가 있는 농장은 그 소유자·슈퍼관리자(`users/{uid}.role == 'super_admin'`)·그리고 그 농장의 `members/{uid}` 문서에 도메인별(재배동·작업·문제·재고 등) 권한이 있는 구성원만 접근할 수 있습니다. 규칙 로직은 `firestore.rules`에, 클라이언트 쪽 같은 판단은 `src/utils/farmAccess.js`(`canReadFarmDomain`/`canWriteFarmDomain`)에 있고 **둘은 반드시 같은 논리를 유지해야 합니다.**
+- **농장종사자 초대는 최상위 `inviteCodes/{code}` 문서로 이뤄집니다.** 농장주가 권한을 골라 코드를 발급하면(`src/stores/farmMembersStore.js`), 그 코드를 받은 사람이 농장 선택 화면에서 입력해 `farms/{farmId}/members/{uid}`를 그 권한 그대로 생성합니다. 코드는 농장 PIN과 같은 수준의 신뢰 모델(강한 암호화 대상 아님, 엄밀한 1회용 아님)이고, 이메일을 직접 보내는 기능은 없습니다(백엔드가 없어서 카톡 등으로 직접 전달). 구성원이 자기 농장 목록에서 그 농장을 보려면 `users/{uid}.memberFarmIds`(합류할 때 자기 자신이 적어 넣음)를 로그인 시 한 번 확인해 farmsStore의 접근 가능 목록에 합칩니다.
 - **`photos/*`(전역 사진 저장소)와 레거시 전역 컬렉션(`shared/farmData`, `shared/availablePesticide`, 최상위 `treatments/*`)은 여전히 `allow read, write: if true`입니다.** 사진 문서엔 어느 농장 것인지 식별할 필드가 전혀 없어(농장별로 나누려면 데이터 마이그레이션이 필요) 이번 라운드에서 일부러 손대지 않았습니다 — 알고 있는, 아직 남은 구멍입니다.
 - **농장/시스템관리 PIN은 인증이 아니라 2차 확인일 뿐입니다.** `src/components/FarmSelectScreen.vue`의 PIN 입력은 실수로 다른 농장·관리 모드에 들어가는 걸 막는 가벼운 절차입니다. 시스템 관리(PIN) 자체도 이제 **슈퍼관리자 로그인**이 선행 조건입니다(`handleAdminClick`) — PIN만으로는 더 이상 들어갈 수 없습니다.
 - **소유자 없는 농장은 앞으로도 계속 소유자 없이 남을 수 있습니다.** 일괄 마이그레이션(백필)을 하지 않기로 결정했습니다 — 로그인한 사용자가 농장 목록에서 자신을 소유자로 지정하는 "소유권 주장"만 규칙에서 허용해 뒀고(`farms/{farmId}` update 규칙), 그 위에 얹을 UI는 아직 없습니다.
@@ -68,7 +69,8 @@ npm run preview  # 빌드 결과 미리보기
 
 | 스토어 | 범위 | Firestore 경로 | 역할 |
 |---|---|---|---|
-| `farmsStore.js` | 전역(농장 목록) | `farms/{farmId}`, 마이그레이션 플래그 `shared/appMeta` | 농장 생성/이름변경/로고/PIN/삭제(소프트)/복원, 관리모드 전환. **농장 "데이터"는 다루지 않음**. 농장 문서엔 `ownerUid`(생성자가 로그인 상태였으면 그 uid, 아니면 `null`)/`visibility`(`'private'`\|`'public'`)도 있지만, 지금은 **기록만 하고 접근을 제한하지 않음** — 규칙(`firestore.rules`)도 여전히 전체 공개 |
+| `farmsStore.js` | 전역(농장 목록) | `farms/{farmId}`, 마이그레이션 플래그 `shared/appMeta` | 농장 생성/이름변경/로고/PIN/삭제(소프트)/복원, 관리모드 전환. **농장 "데이터"는 다루지 않음**. 농장 문서의 `ownerUid`(생성자가 로그인 상태였으면 그 uid, 아니면 `null`)/`visibility`(`'private'`\|`'public'`)는 이제 규칙(`firestore.rules`)에서 실제로 접근을 제한한다 — 접근 가능한 농장 목록은 소유권(`farmAccess.canAccessFarm`) **또는** 구성원 자격(`farmMembersStore.myFarmIds`)이 있으면 포함됨 |
+| `farmMembersStore.js` | 농장 1개(구성원 목록) + 전역(내가 속한 농장) | `inviteCodes/{code}`, `farms/{farmId}/members/{uid}`, `farms/{farmId}/inviteCodeRefs/{code}`, `users/{uid}.memberFarmIds` | 농장종사자 초대 코드 발급/폐기, 구성원별 도메인 권한(`canRead`/`canWrite`) 관리. 소유자·슈퍼관리자는 구성원 전체 목록을 구독하고, 일반 구성원은 자기 권한 문서만 구독함 |
 | `farmStore.js` | 농장 1개 | `farms/{farmId}/data/{facilities,ancillaries,seedlings,tasks,issues,inventory,usageGuides,changeLog}` (도메인별 문서 8개, 6.1 참고) | 재배동·시설장비·묘목·작업·문제·재고·사용법·**변경이력(changeLog)**. 앱에서 가장 크고 중심적인 스토어. `farmStore.js` 자체는 배관(초기화·저장·구독)만 하고, 실제 CRUD는 `src/stores/farmStore/*.js`로 도메인별로 나뉘어 있음(6.1 참고) |
 | `treatmentStore.js` | 농장 1개 | `farms/{farmId}/treatments/{id}` | 방제이력(방제 스프레이 기록). 문서 하나가 아니라 **레코드별 컬렉션**이라 다른 스토어와 저장 방식이 다름 |
 | `availablePesticideStore.js` | 농장 1개 | `farms/{farmId}/data/availablePesticide` | "가용농약" = 구입가능 텍스트 입력 + 재고 데이터를 합쳐서 만든 실사용 가능 농약 목록 |

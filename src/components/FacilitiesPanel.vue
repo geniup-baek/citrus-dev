@@ -4,6 +4,7 @@ import { useFarmStore } from '../stores/farmStore'
 import { useLocaleStore } from '../stores/localeStore'
 import { useRecommendSettingsStore } from '../stores/recommendSettingsStore'
 import { useAppPolicyStore } from '../stores/appPolicyStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { confirm } from '../composables/useConfirm'
 import { useIsMobile } from '../composables/useIsMobile'
 import { useLightbox } from '../composables/useLightbox'
@@ -15,6 +16,7 @@ const store = useFarmStore()
 const localeStore = useLocaleStore()
 const recSettingsStore = useRecommendSettingsStore()
 const policyStore = useAppPolicyStore()
+const farmMembersStore = useFarmMembersStore()
 const editingId = ref('')
 const showForm = ref(false)
 
@@ -184,8 +186,8 @@ async function saveFacility() {
     <article>
       <div class="pip-header">
         <div class="pip-actions">
-          <button v-if="!showForm" @click="openAdd">{{ localeStore.t('common.edit') }}</button>
-          <template v-else>
+          <button v-if="!showForm && farmMembersStore.canWrite('facilities')" @click="openAdd">{{ localeStore.t('common.edit') }}</button>
+          <template v-else-if="showForm">
             <button
               v-if="showResetButton && store.state.facilities.length > 0"
               class="danger"
@@ -222,8 +224,8 @@ async function saveFacility() {
             <template v-if="showForm">
               <button class="ghost" :disabled="i === 0" @click="moveFacility(i, -1)">{{ localeStore.t('common.moveUp') }}</button>
               <button class="ghost" :disabled="i === store.state.facilities.length - 1" @click="moveFacility(i, 1)">{{ localeStore.t('common.moveDown') }}</button>
-              <button :class="{ ghost: editingId !== facility.id }" @click="editFacility(facility)">{{ localeStore.t('common.edit') }}</button>
-              <button class="danger" @click="confirmDeleteFacility(facility)">{{ localeStore.t('common.delete') }}</button>
+              <button v-if="farmMembersStore.canWrite('facilities')" :class="{ ghost: editingId !== facility.id }" @click="editFacility(facility)">{{ localeStore.t('common.edit') }}</button>
+              <button v-if="farmMembersStore.canWrite('facilities')" class="danger" @click="confirmDeleteFacility(facility)">{{ localeStore.t('common.delete') }}</button>
             </template>
           </div>
           <div :id="`fac-form-slot-${facility.id}`" class="mobile-form-slot"></div>

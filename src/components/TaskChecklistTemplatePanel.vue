@@ -7,11 +7,13 @@ import { reactive, ref, computed } from 'vue'
 import { format } from 'date-fns'
 import { useFarmStore } from '../stores/farmStore'
 import { useLocaleStore } from '../stores/localeStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { confirm } from '../composables/useConfirm'
 import { uuid } from '../utils/uuid.js'
 
 const store = useFarmStore()
 const localeStore = useLocaleStore()
+const farmMembersStore = useFarmMembersStore()
 
 const taskCategories = computed(() => store.state.appSettings?.taskCategories ?? ['기타'])
 const templates = computed(() => store.state.checklistTemplates || [])
@@ -188,7 +190,7 @@ clearTemplateForm()
     <label>{{ localeStore.t('tasks.dueDate') }}
       <input v-model="createDueDate" required type="date" />
     </label>
-    <div class="row-actions">
+    <div v-if="farmMembersStore.canWrite('tasks')" class="row-actions">
       <button type="submit" :disabled="!templates.length">{{ localeStore.t('tasks.create') }}</button>
     </div>
   </form>
@@ -198,7 +200,7 @@ clearTemplateForm()
   <!-- ② 템플릿 목록 -->
   <div class="row-actions align-start" style="margin-bottom: 0.5rem;">
     <h3 class="section-title" style="margin: 0;">{{ localeStore.t('tasks.checklistTemplateList') }}</h3>
-    <div class="row-actions">
+    <div v-if="farmMembersStore.canWrite('tasks')" class="row-actions">
       <button class="ghost compact-btn" type="button" @click="triggerImport">{{ localeStore.t('tasks.checklistTemplateImport') }}</button>
       <input ref="importInput" accept="application/json,.json" type="file" style="display: none;" @change="handleImportFile" />
       <button v-if="!showTemplateForm" class="ghost compact-btn" type="button" @click="openNewTemplateForm">{{ localeStore.t('tasks.checklistTemplateNew') }}</button>
@@ -217,8 +219,10 @@ clearTemplateForm()
       </div>
       <div class="row-actions">
         <button class="ghost" type="button" @click="exportTemplate(tpl)">{{ localeStore.t('tasks.checklistTemplateExport') }}</button>
-        <button class="ghost" type="button" @click="editTemplate(tpl)">{{ localeStore.t('common.edit') }}</button>
-        <button class="danger" type="button" @click="confirmDeleteTemplate(tpl)">{{ localeStore.t('common.delete') }}</button>
+        <template v-if="farmMembersStore.canWrite('tasks')">
+          <button class="ghost" type="button" @click="editTemplate(tpl)">{{ localeStore.t('common.edit') }}</button>
+          <button class="danger" type="button" @click="confirmDeleteTemplate(tpl)">{{ localeStore.t('common.delete') }}</button>
+        </template>
       </div>
     </li>
     <li v-if="!templates.length" class="muted text-sm">{{ localeStore.t('tasks.checklistTemplateEmptyList') }}</li>

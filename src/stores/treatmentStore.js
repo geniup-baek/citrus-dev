@@ -8,6 +8,7 @@ import {
 import { doc as liteDoc, collection as liteCollection, writeBatch as liteWriteBatch } from 'firebase/firestore/lite'
 import { useFarmStore } from './farmStore.js'
 import { useFarmsStore } from './farmsStore.js'
+import { useFarmMembersStore } from './farmMembersStore.js'
 import { diffFields, formatFieldDiff, snapshotForRevert } from '../utils/changeLogUtils.js'
 
 function treatmentLabel(record) {
@@ -42,12 +43,21 @@ export const useTreatmentStore = defineStore('treatment', () => {
     return collection(db, 'farms', activeFarmId, 'treatments')
   }
 
-  function init(farmId) {
+  async function init(farmId) {
     if (initialized.value) return
     initialized.value = true
     activeFarmId = farmId
 
     if (firebaseEnabled && db) {
+      const farmMembersStore = useFarmMembersStore()
+      await farmMembersStore.ready()
+      if (!farmMembersStore.hasFullAccess && !farmMembersStore.canRead('treatments')) {
+        // 방제이력 읽기 권한이 없는 구성원 — 구독을 시도하면 거부되므로 애초에
+        // 시도하지 않는다. 빈 목록으로 남고, ready만 true로 만들어 화면이 계속
+        // "불러오는 중"에 머물지 않게 한다.
+        ready.value = true
+        return
+      }
       const q = query(collectionRef(), orderBy('date', 'desc'))
       onSnapshot(
         q,
