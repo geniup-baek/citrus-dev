@@ -84,13 +84,16 @@ service cloud.firestore {
     }
 
     match /shared/farmData {
-      // 구버전(단일 농장) 문서. 다중 농장 마이그레이션 후에는 더 이상 쓰지 않지만
-      // 안전을 위해 삭제하지 않고 남겨둔다.
-      allow read, write: if true;
+      // 구버전(단일 농장) 문서 — 예전 농장 하나의 실제 데이터가 그대로 들어있는
+      // 잔재다. 다중 농장 마이그레이션(farmsStore.js migrateLegacyIfNeeded, 이미
+      // 완료되어 다시 실행되지 않음) 이후로는 코드에서 전혀 읽지도 쓰지도 않는다
+      // — 안전을 위해 삭제는 안 하지만, 슈퍼관리자만 열어볼 수 있게 잠근다.
+      allow read, write: if isSuperAdmin();
     }
     match /shared/availablePesticide {
       // 구버전(단일 농장) 문서. farms/{farmId}/data/availablePesticide로 대체됨.
-      allow read, write: if true;
+      // 위와 같은 이유로 슈퍼관리자만 접근 가능.
+      allow read, write: if isSuperAdmin();
     }
     match /shared/appSettings {
       // 분류·항목 설정(작업 분류, 재배 품종, 농약 종류 등) — 모든 농장이 공유하는 공통 설정.
@@ -102,8 +105,9 @@ service cloud.firestore {
     }
     match /shared/recommendPrefs {
       // 구버전 문서. 방제이력 재연결/붙여넣기 일괄추가 방식은 다시 농장별 정책
-      // (farms/{farmId}/data/recommendSettings)으로 옮겨져 더 이상 쓰지 않는다.
-      allow read, write: if true;
+      // (farms/{farmId}/data/recommendSettings)으로 옮겨져 코드에서 전혀 참조하지
+      // 않는다(grep 확인) — 슈퍼관리자만 접근 가능.
+      allow read, write: if isSuperAdmin();
     }
     match /farms/{farmId} {
       // 농장 등록 정보(이름·로고·PIN·소유자). read는 그대로 열어둔다 — farmsStore.js가
@@ -196,8 +200,9 @@ service cloud.firestore {
         : (request.resource.data.get('farmId', null) == resource.data.farmId && canAccessPhotoFarm(resource.data.farmId));
     }
     match /treatments/{treatmentId} {
-      // 구버전(단일 농장) 컬렉션. farms/{farmId}/treatments로 대체됨.
-      allow read, write: if true;
+      // 구버전(단일 농장) 컬렉션. farms/{farmId}/treatments로 대체되어 코드에서
+      // 전혀 참조하지 않는다(grep 확인) — 슈퍼관리자만 접근 가능.
+      allow read, write: if isSuperAdmin();
     }
     match /sharedCache/{key} {
       // 로컬 실행 환경에서 가져온 OpenAPI 전건 캐시(농약정보/병해충정보)를 공유한다.
