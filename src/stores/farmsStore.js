@@ -10,9 +10,10 @@ import { DOMAIN_KEYS } from '../utils/farmDataSchema.js'
 import { useAuthStore } from './authStore.js'
 import { useFarmMembersStore } from './farmMembersStore.js'
 import { canAccessFarm } from '../utils/farmAccess.js'
+import { LS_PREFIX } from '../utils/storagePrefix.js'
 
-const LS_ACTIVE = 'citrus:active-farm'
-const LS_MODE = 'citrus:app-mode' // '' | 'farm' | 'admin'. localStorage에 키 자체가 없으면(null) "한 번도 선택한 적 없음"으로 취급한다.
+const LS_ACTIVE = `${LS_PREFIX}:active-farm`
+const LS_MODE = `${LS_PREFIX}:app-mode` // '' | 'farm' | 'admin'. localStorage에 키 자체가 없으면(null) "한 번도 선택한 적 없음"으로 취급한다.
 const LOCAL_FARM_ID = 'local' // Firebase 비활성(로컬 전용) 환경에서 쓰는 고정 농장 id
 
 // 기존 단일 농장 데이터를 다중 농장 구조로 1회 이전한다.

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { nextTick, reactive, watch } from 'vue'
 import { doc, onSnapshot, setDoc } from 'firebase/firestore'
 import { db, firebaseEnabled } from '../services/firebase.js'
+import { LS_PREFIX } from '../utils/storagePrefix.js'
 
 // 모든 기기·모든 농장에 공통으로 적용되는 정책. 시스템 관리 모드에서만 변경한다.
 //
@@ -10,7 +11,7 @@ import { db, firebaseEnabled } from '../services/firebase.js'
 // 문서 위치는 sharedCache 컬렉션 — 기존 규칙(firestore.rules)이 이미 허용하는 경로라
 // 규칙 배포 없이도 바로 동기화된다.
 const DOC_PATH = ['sharedCache', 'app:policy']
-const LS_KEY = 'citrus:app-policy'
+const LS_KEY = `${LS_PREFIX}:app-policy`
 
 const DEFAULTS = {
   allowManualPesticideForAll: false, // 농약 직접등록(자료 > 농약)을 농장 모드에서도 허용할지

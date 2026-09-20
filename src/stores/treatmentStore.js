@@ -10,6 +10,7 @@ import { useFarmStore } from './farmStore.js'
 import { useFarmsStore } from './farmsStore.js'
 import { useFarmMembersStore } from './farmMembersStore.js'
 import { diffFields, formatFieldDiff, snapshotForRevert } from '../utils/changeLogUtils.js'
+import { LS_PREFIX } from '../utils/storagePrefix.js'
 
 function treatmentLabel(record) {
   return [record?.date, record?.brandName].filter(Boolean).join(' ')
@@ -18,7 +19,7 @@ function treatmentLabel(record) {
 const TREATMENT_FIELD_LABELS = { date: '날짜', brandName: '농약', moa: '계통', category: '구분', memo: '메모' }
 
 function lsKey(farmId) {
-  return `citrus:treatments:${farmId}`
+  return `${LS_PREFIX}:treatments:${farmId}`
 }
 
 function sortDesc(arr) {

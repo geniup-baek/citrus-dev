@@ -1,7 +1,8 @@
 import { doc, getDoc, setDoc } from 'firebase/firestore'
 import { db, firebaseEnabled } from './firebase.js'
+import { LS_PREFIX } from '../utils/storagePrefix.js'
 
-export const CACHE_PREFIX = 'citrus:'
+export const CACHE_PREFIX = `${LS_PREFIX}:`
 const PREFIX = CACHE_PREFIX
 const SHARED_COLLECTION = 'sharedCache'
 

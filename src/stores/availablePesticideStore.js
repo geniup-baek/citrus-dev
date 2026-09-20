@@ -6,14 +6,15 @@ import { db, firebaseEnabled } from '../services/firebase.js'
 import { useFarmsStore } from './farmsStore.js'
 import { useFarmMembersStore } from './farmMembersStore.js'
 import { allPesticideRecords, detailCacheKey, findToxicityInCache } from '../services/pesticide.js'
+import { LS_PREFIX } from '../utils/storagePrefix.js'
 
 const FULL_KEY    = 'pesticide:all'
 
 function lsKeys(farmId) {
   return {
-    purchase: `citrus:ap:${farmId}:purchase-input`,
-    list:     `citrus:ap:${farmId}:list`,
-    matches:  `citrus:ap:${farmId}:manual-matches`,
+    purchase: `${LS_PREFIX}:ap:${farmId}:purchase-input`,
+    list:     `${LS_PREFIX}:ap:${farmId}:list`,
+    matches:  `${LS_PREFIX}:ap:${farmId}:manual-matches`,
   }
 }
 

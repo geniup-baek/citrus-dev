@@ -4,12 +4,13 @@ import { doc, onSnapshot, setDoc } from 'firebase/firestore'
 import { db, firebaseEnabled } from '../services/firebase.js'
 import { useFarmsStore } from './farmsStore.js'
 import { useFarmMembersStore } from './farmMembersStore.js'
+import { LS_PREFIX } from '../utils/storagePrefix.js'
 
-const LEGACY_LS_KEY = 'citrus:recommend-settings' // 농장 분리 이전 통합 키 (1회 이전용)
-const PREF_LS_KEY = 'citrus:recommend-prefs' // 공통(농장 무관) 동작 설정 — 기기 로컬
+const LEGACY_LS_KEY = `${LS_PREFIX}:recommend-settings` // 농장 분리 이전 통합 키 (1회 이전용)
+const PREF_LS_KEY = `${LS_PREFIX}:recommend-prefs` // 공통(농장 무관) 동작 설정 — 기기 로컬
 
 function policyLsKey(farmId) {
-  return `citrus:recommend-policy:${farmId}`
+  return `${LS_PREFIX}:recommend-policy:${farmId}`
 }
 
 // 농약 사용 "정책" — 농장마다 다를 수 있어 농장별로 저장(Firestore 공유 + 농장별 로컬 캐시).

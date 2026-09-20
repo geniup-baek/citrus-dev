@@ -19,9 +19,10 @@ import {
   defaultUsageGuides,
 } from '../data/defaults'
 import { uuid } from './uuid.js'
+import { LS_PREFIX } from './storagePrefix.js'
 
 export function farmStorageKey(farmId) {
-  return `citrus-farm-${farmId}-v1`
+  return `${LS_PREFIX}-farm-${farmId}-v1`
 }
 
 // ── Firestore 문서 분할 지도 ──────────────────────────────────────────────────

@@ -22,6 +22,7 @@ import { createInventoryActions } from './farmStore/inventory.js'
 import { createBackupActions } from './farmStore/backup.js'
 import { useFarmsStore } from './farmsStore.js'
 import { useFarmMembersStore } from './farmMembersStore.js'
+import { LS_PREFIX } from '../utils/storagePrefix.js'
 
 // 이 파일은 스토어의 배관(초기화·저장·구독)과 각 도메인 모듈을 엮는 역할만 한다.
 // 실제 CRUD 로직은 ./farmStore/*.js에 도메인별로 나뉘어 있다 — 전체 구조는
@@ -30,8 +31,8 @@ import { useFarmMembersStore } from './farmMembersStore.js'
 // 농장 데이터는 farms/{farmId}/data/{도메인키} 문서로 나뉘어 저장된다(도메인 목록은
 // src/utils/farmDataSchema.js의 DOMAIN_SYNC 참고) — 예전엔 farmData 문서 하나에 전부 있었다.
 
-const APP_SETTINGS_LS_KEY = 'citrus:app-settings' // 공통(농장 무관) 분류·항목 설정
-const ACTOR_NAME_LS_KEY = 'citrus:actor-name' // 이 기기에서 변경 이력에 표시할 이름(기기별 로컬 저장, 서버 동기화 안 함)
+const APP_SETTINGS_LS_KEY = `${LS_PREFIX}:app-settings` // 공통(농장 무관) 분류·항목 설정
+const ACTOR_NAME_LS_KEY = `${LS_PREFIX}:actor-name` // 이 기기에서 변경 이력에 표시할 이름(기기별 로컬 저장, 서버 동기화 안 함)
 
 export const useFarmStore = defineStore('farm', () => {
   const initialized = ref(false)
