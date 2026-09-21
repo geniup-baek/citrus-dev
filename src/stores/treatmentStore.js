@@ -1,16 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { db, dbLite, firebaseEnabled } from '../services/firebase.js'
-import {
-  collection, query, orderBy, onSnapshot,
-  addDoc, deleteDoc, doc, updateDoc, Timestamp,
-} from 'firebase/firestore'
-import { doc as liteDoc, collection as liteCollection, writeBatch as liteWriteBatch } from 'firebase/firestore/lite'
+import { db, firebaseEnabled } from '../services/firebase.js'
+import { doc, onSnapshot, setDoc } from 'firebase/firestore'
 import { useFarmStore } from './farmStore.js'
 import { useFarmsStore } from './farmsStore.js'
 import { useFarmMembersStore } from './farmMembersStore.js'
 import { diffFields, formatFieldDiff, snapshotForRevert } from '../utils/changeLogUtils.js'
 import { LS_PREFIX } from '../utils/storagePrefix.js'
+import { uuid } from '../utils/uuid.js'
 
 function treatmentLabel(record) {
   return [record?.date, record?.brandName].filter(Boolean).join(' ')
@@ -29,19 +26,38 @@ function sortDesc(arr) {
   })
 }
 
+// farms/{farmId}/data/treatments 문서 하나에 배열로 저장한다(다른 도메인 스토어
+// availablePesticideStore.js·recommendSettingsStore.js와 같은 방식 — farmStore.js의
+// DOMAIN_SYNC와는 별개로 이 스토어가 독립적으로 문서를 관리한다). 예전엔 레코드마다
+// 문서를 따로 두는 컬렉션이었는데, 방제이력은 다른 도메인과 달리 상한이 없어서
+// 세션마다 읽기 비용이 기록 수만큼 그대로 늘어났다 — 배열 문서로 통일해 다른
+// 도메인과 같은 상한(withinDomainArrayCap, firestore.rules)의 보호를 받게 했다.
 export const useTreatmentStore = defineStore('treatment', () => {
   const treatments = ref([])
   const ready = ref(false)
   const initialized = ref(false)
   let activeFarmId = null
+  let writeDebounce = null
 
   function saveLS(arr) {
     if (!activeFarmId) return
     try { localStorage.setItem(lsKey(activeFarmId), JSON.stringify(arr)) } catch {}
   }
 
-  function collectionRef() {
-    return collection(db, 'farms', activeFarmId, 'treatments')
+  function docRef() {
+    return doc(db, 'farms', activeFarmId, 'data', 'treatments')
+  }
+
+  function scheduleWrite() {
+    if (!firebaseEnabled || !db || !activeFarmId) return
+    clearTimeout(writeDebounce)
+    writeDebounce = setTimeout(async () => {
+      try {
+        await setDoc(docRef(), { treatments: treatments.value, updatedAt: new Date().toISOString() }, { merge: true })
+      } catch (e) {
+        console.warn('[treatmentStore] Firestore 저장 실패, 다음 변경 때 다시 시도합니다.', e)
+      }
+    }, 500)
   }
 
   async function init(farmId) {
@@ -59,11 +75,10 @@ export const useTreatmentStore = defineStore('treatment', () => {
         ready.value = true
         return
       }
-      const q = query(collectionRef(), orderBy('date', 'desc'))
       onSnapshot(
-        q,
+        docRef(),
         (snap) => {
-          treatments.value = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+          treatments.value = sortDesc(Array.isArray(snap.data()?.treatments) ? snap.data().treatments : [])
           saveLS(treatments.value)
           ready.value = true
         },
@@ -79,68 +94,31 @@ export const useTreatmentStore = defineStore('treatment', () => {
   }
 
   async function addTreatment(record, { silent = false } = {}) {
-    if (firebaseEnabled && db) {
-      await addDoc(collectionRef(), {
-        ...record,
-        createdAt: Timestamp.now().toDate().toISOString(),
-      })
-    } else {
-      const item = {
-        ...record,
-        id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        createdAt: new Date().toISOString(),
-      }
-      treatments.value = sortDesc([item, ...treatments.value])
-      saveLS(treatments.value)
-    }
+    const item = { ...record, id: uuid(), createdAt: new Date().toISOString() }
+    treatments.value = sortDesc([item, ...treatments.value])
+    saveLS(treatments.value)
+    scheduleWrite()
     if (!silent) useFarmStore().logChange('방제이력', treatmentLabel(record), 'add')
   }
 
   async function updateTreatment(id, record) {
     const before = treatments.value.find(t => t.id === id)
-    if (firebaseEnabled && db) {
-      await updateDoc(doc(db, 'farms', activeFarmId, 'treatments', id), record)
-    } else {
-      treatments.value = sortDesc(
-        treatments.value.map(t => t.id === id ? { ...t, ...record } : t),
-      )
-      saveLS(treatments.value)
-    }
+    treatments.value = sortDesc(
+      treatments.value.map(t => t.id === id ? { ...t, ...record } : t),
+    )
+    saveLS(treatments.value)
+    scheduleWrite()
     const fields = diffFields(before, record, TREATMENT_FIELD_LABELS)
     useFarmStore().logChange('방제이력', treatmentLabel(record), 'update', formatFieldDiff(fields), { refId: id, fields })
   }
 
   async function replaceAllTreatments(records) {
     const prevCount = treatments.value.length
-    if (firebaseEnabled && dbLite) {
-      // writeBatch(일반 db)도 실시간 리스너용 영속 Write 스트림을 같이 쓰기 때문에, 대량
-      // 교체에서는 배치로 건수를 줄여도 그 스트림 자체의 "대기 가능한 쓰기 수" 한도에 걸려
-      // "Write stream exhausted maximum allowed queued writes" 오류가 났다(백업 복원의 사진
-      // 복원에서도 같은 문제가 있었다 — farmStore/backup.js 참고, 실측으로 확인됨).
-      // firestore/lite는 스트림이 아니라 매 커밋마다 일반 HTTP 요청으로 끝나므로 그 한도가
-      // 적용되지 않는다.
-      const BATCH_SIZE = 400 // Firestore 배치 한도(500)보다 여유 있게
-      for (let i = 0; i < treatments.value.length; i += BATCH_SIZE) {
-        const batch = liteWriteBatch(dbLite)
-        for (const t of treatments.value.slice(i, i + BATCH_SIZE)) {
-          batch.delete(liteDoc(dbLite, 'farms', activeFarmId, 'treatments', t.id))
-        }
-        await batch.commit()
-      }
-      for (let i = 0; i < records.length; i += BATCH_SIZE) {
-        const batch = liteWriteBatch(dbLite)
-        for (const r of records.slice(i, i + BATCH_SIZE)) {
-          const data = Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'id'))
-          batch.set(liteDoc(liteCollection(dbLite, 'farms', activeFarmId, 'treatments')), data)
-        }
-        await batch.commit()
-      }
-    } else {
-      treatments.value = sortDesc(
-        records.map((r, i) => ({ ...r, id: r.id || `restored-${Date.now()}-${i}` })),
-      )
-      saveLS(treatments.value)
-    }
+    treatments.value = sortDesc(
+      records.map((r) => ({ ...r, id: r.id || uuid() })),
+    )
+    saveLS(treatments.value)
+    scheduleWrite()
     if (records.length === 0) {
       if (prevCount > 0) useFarmStore().logChange('방제이력', `전체 초기화 (${prevCount}건)`, 'delete')
     } else {
@@ -150,12 +128,9 @@ export const useTreatmentStore = defineStore('treatment', () => {
 
   async function deleteTreatment(id) {
     const target = treatments.value.find(t => t.id === id)
-    if (firebaseEnabled && db) {
-      await deleteDoc(doc(db, 'farms', activeFarmId, 'treatments', id))
-    } else {
-      treatments.value = treatments.value.filter(t => t.id !== id)
-      saveLS(treatments.value)
-    }
+    treatments.value = treatments.value.filter(t => t.id !== id)
+    saveLS(treatments.value)
+    scheduleWrite()
     if (target) {
       useFarmStore().logChange('방제이력', treatmentLabel(target), 'delete', '', { snapshot: snapshotForRevert(target) })
     }

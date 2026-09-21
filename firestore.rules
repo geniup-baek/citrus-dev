@@ -102,31 +102,9 @@ service cloud.firestore {
         || canAccessFarm(farmId);
     }
 
-    match /shared/farmData {
-      // 구버전(단일 농장) 문서 — 예전 농장 하나의 실제 데이터가 그대로 들어있는
-      // 잔재다. 다중 농장 마이그레이션(farmsStore.js migrateLegacyIfNeeded, 이미
-      // 완료되어 다시 실행되지 않음) 이후로는 코드에서 전혀 읽지도 쓰지도 않는다
-      // — 안전을 위해 삭제는 안 하지만, 슈퍼관리자만 열어볼 수 있게 잠근다.
-      allow read, write: if isSuperAdmin();
-    }
-    match /shared/availablePesticide {
-      // 구버전(단일 농장) 문서. farms/{farmId}/data/availablePesticide로 대체됨.
-      // 위와 같은 이유로 슈퍼관리자만 접근 가능.
-      allow read, write: if isSuperAdmin();
-    }
     match /shared/appSettings {
       // 분류·항목 설정(작업 분류, 재배 품종, 농약 종류 등) — 모든 농장이 공유하는 공통 설정.
       allow read, write: if true;
-    }
-    match /shared/appMeta {
-      // 다중 농장 마이그레이션 여부 등 시스템 메타데이터.
-      allow read, write: if true;
-    }
-    match /shared/recommendPrefs {
-      // 구버전 문서. 방제이력 재연결/붙여넣기 일괄추가 방식은 다시 농장별 정책
-      // (farms/{farmId}/data/recommendSettings)으로 옮겨져 코드에서 전혀 참조하지
-      // 않는다(grep 확인) — 슈퍼관리자만 접근 가능.
-      allow read, write: if isSuperAdmin();
     }
     match /farms/{farmId} {
       // 농장 등록 정보(이름·로고·PIN·공개여부). read는 그대로 열어둔다 — farmsStore.js가
@@ -177,8 +155,10 @@ service cloud.firestore {
         || (request.auth != null && resource.data.get('ownerUid', null) == request.auth.uid);
     }
     match /farms/{farmId}/data/{docId} {
-      // 농장별 데이터: farmData(재배동·작업·재고 등), availablePesticide, recommendSettings.
-      // 소유자·슈퍼관리자·공개농장은 항상 전체 접근, 그 외엔 도메인별(domainKeyFor 매핑
+      // 농장별 데이터: facilities/ancillaries/seedlings/tasks/issues/inventory/usageGuides/
+      // changeLog(도메인별), availablePesticide/recommendSettings/treatments(전용 스토어가
+      // 독립적으로 관리 — farmStore.js의 DOMAIN_SYNC엔 없다). 소유자·슈퍼관리자·공개농장은
+      // 항상 전체 접근, 그 외엔 도메인별(domainKeyFor 매핑
       // 참고) 구성원 권한을 본다. delete 요청엔 request.resource 가 없어(null) 배열
       // 길이 조건을 걸면 삭제 자체가 막힌다 — 그렇다고 read 조건(canReadFarmDomain)을
       // 쓰면 안 된다. ⚠ 실제로 이 실수를 했었다: 읽기 전용(write:false) 구성원이
@@ -187,13 +167,6 @@ service cloud.firestore {
       allow read: if canReadFarmDomain(farmId, docId);
       allow delete: if canWriteFarmDomain(farmId, docId);
       allow create, update: if canWriteFarmDomain(farmId, docId) && withinDomainArrayCap(docId, request.resource.data);
-    }
-    match /farms/{farmId}/treatments/{treatmentId} {
-      // 농장별 방제 이력. 레코드 1건 = 문서 1건이라 배열 길이 상한은 해당 없다.
-      // Firestore 자체의 문서당 1MiB 한도가 이미(규칙 없이도) 적용되므로 별도
-      // 상한을 걸지 않는다 — 위 주석 참고. 도메인 키는 'treatments' 고정.
-      allow read: if canReadFarmDomain(farmId, 'treatments');
-      allow write: if canWriteFarmDomain(farmId, 'treatments');
     }
     match /farms/{farmId}/members/{memberUid} {
       // 농장종사자 권한 문서. 본인·소유자·슈퍼관리자만 읽을 수 있다(다른 구성원의
@@ -261,11 +234,6 @@ service cloud.firestore {
         ? (request.resource.data.get('farmId', null) == null
           || (request.resource.data.farmId != null && canAccessPhotoFarm(request.resource.data.farmId)))
         : (request.resource.data.get('farmId', null) == resource.data.farmId && canAccessPhotoFarm(resource.data.farmId));
-    }
-    match /treatments/{treatmentId} {
-      // 구버전(단일 농장) 컬렉션. farms/{farmId}/treatments로 대체되어 코드에서
-      // 전혀 참조하지 않는다(grep 확인) — 슈퍼관리자만 접근 가능.
-      allow read, write: if isSuperAdmin();
     }
     match /sharedCache/{key} {
       // 로컬 실행 환경에서 가져온 OpenAPI 전건 캐시(농약정보/병해충정보)를 공유한다.

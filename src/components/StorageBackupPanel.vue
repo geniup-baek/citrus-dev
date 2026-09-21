@@ -86,12 +86,11 @@ async function refreshFirestoreUsage() {
         for (const docPath of [
           ['farms', farm.id, 'data', 'availablePesticide'],
           ['farms', farm.id, 'data', 'recommendSettings'],
+          ['farms', farm.id, 'data', 'treatments'],
         ]) {
           const snap = await getDoc(doc(db, ...docPath))
           if (snap.exists()) farmBytes += byteSize(snap.data())
         }
-        const treatSnap = await getDocs(collection(db, 'farms', farm.id, 'treatments'))
-        treatSnap.forEach((d) => { farmBytes += byteSize(d.data()) })
         farmBytes += await farmPhotoBytes(farm.id)
         breakdown.push({ label: `농장: ${farm.name}${farm.deletedAt ? ' (삭제됨)' : ''}`, bytes: farmBytes })
       }
@@ -124,6 +123,7 @@ async function refreshFirestoreUsage() {
     for (const [label, docPath] of [
       ['가용농약', ['farms', farmId, 'data', 'availablePesticide']],
       ['농약추천 정책', ['farms', farmId, 'data', 'recommendSettings']],
+      ['방제이력', ['farms', farmId, 'data', 'treatments']],
       ['분류·항목 설정(공통)', ['shared', 'appSettings']],
     ]) {
       const snap = await getDoc(doc(db, ...docPath))
@@ -131,7 +131,6 @@ async function refreshFirestoreUsage() {
     }
 
     for (const [label, colPath] of [
-      ['방제이력', ['farms', farmId, 'treatments']],
       ['공공데이터 캐시(공통, 농약·병해충 정보)', ['sharedCache']],
     ]) {
       const snap = await getDocs(collection(db, ...colPath))

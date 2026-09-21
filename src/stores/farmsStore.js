@@ -16,56 +16,6 @@ const LS_ACTIVE = `${LS_PREFIX}:active-farm`
 const LS_MODE = `${LS_PREFIX}:app-mode` // '' | 'farm' | 'admin'. localStorage에 키 자체가 없으면(null) "한 번도 선택한 적 없음"으로 취급한다.
 const LOCAL_FARM_ID = 'local' // Firebase 비활성(로컬 전용) 환경에서 쓰는 고정 농장 id
 
-// 기존 단일 농장 데이터를 다중 농장 구조로 1회 이전한다.
-// - shared/farmData(appSettings 제외) → farms/main/data/farmData
-// - shared/farmData.appSettings      → shared/appSettings (공통)
-// - shared/availablePesticide        → farms/main/data/availablePesticide
-// - treatments/*                     → farms/main/treatments/*
-// 기존 문서는 안전을 위해 삭제하지 않고 그대로 둔다.
-async function migrateLegacyIfNeeded() {
-  const metaRef = doc(db, 'shared', 'appMeta')
-  const metaSnap = await getDoc(metaRef)
-  if (metaSnap.exists() && metaSnap.data()?.multiFarmMigratedV1) return
-
-  const legacySnap = await getDoc(doc(db, 'shared', 'farmData'))
-  if (!legacySnap.exists()) {
-    // 이전할 기존 데이터가 없는 완전히 새로운 환경 — 가드만 세우고 종료.
-    await setDoc(metaRef, { multiFarmMigratedV1: true }, { merge: true })
-    return
-  }
-
-  const legacyData = legacySnap.data()
-  const { appSettings, ...farmDataRest } = legacyData
-
-  const farmId = 'main'
-  await setDoc(doc(db, 'farms', farmId), {
-    name: '농장 1',
-    logo: '',
-    order: 0,
-    createdAt: new Date().toISOString(),
-    // 이전받는 기존 농장이라 소유자가 없다 — 규칙(firestore.rules)의 소유권 강제와
-    // 어긋나지 않으려면 명시적으로 public을 써야 한다(필드 누락은 규칙에서 별도로
-    // 처리하긴 하지만, 새로 만드는 문서는 항상 명시하는 게 맞다).
-    visibility: 'public',
-  })
-  await setDoc(doc(db, 'farms', farmId, 'data', 'farmData'), farmDataRest, { merge: true })
-  if (appSettings && typeof appSettings === 'object') {
-    await setDoc(doc(db, 'shared', 'appSettings'), appSettings, { merge: true })
-  }
-
-  const apSnap = await getDoc(doc(db, 'shared', 'availablePesticide'))
-  if (apSnap.exists()) {
-    await setDoc(doc(db, 'farms', farmId, 'data', 'availablePesticide'), apSnap.data(), { merge: true })
-  }
-
-  const treatSnap = await getDocs(collection(db, 'treatments'))
-  for (const d of treatSnap.docs) {
-    await setDoc(doc(db, 'farms', farmId, 'treatments', d.id), d.data())
-  }
-
-  await setDoc(metaRef, { multiFarmMigratedV1: true }, { merge: true })
-}
-
 export const useFarmsStore = defineStore('farms', () => {
   const authStore = useAuthStore()
   const farmMembersStore = useFarmMembersStore()
@@ -79,9 +29,8 @@ export const useFarmsStore = defineStore('farms', () => {
     rawLoading.value || (firebaseEnabled
       && (authStore.loading || farmMembersStore.myFarmIdsLoading || farmMembersStore.myOwnedFarmIdsLoading)))
   const initialized = ref(false)
-  const migrationError = ref(null)
   // 농장 관련 실시간 구독이 거부당했을 때(예: 로그아웃 경합, 소유권 변경) 채워진다.
-  // App.vue가 migrationError와 같은 자리에서 "새로고침해 주세요" 카드를 띄운다.
+  // App.vue가 이 값이 있으면 "새로고침해 주세요" 카드를 띄운다.
   const accessError = ref(null)
   function reportAccessError(err) {
     console.warn('[farmsStore] 농장 데이터 접근 거부', err)
@@ -120,7 +69,7 @@ export const useFarmsStore = defineStore('farms', () => {
 
   // 마이그레이션이 실패했는데 농장이 0개로 보이면 "새 농장 만들기"를 띄우지 않는다 —
   // 기존 데이터가 남아있는 채로 새 빈 농장을 만들게 되는 혼란을 막기 위함. 새로고침 재시도를 유도한다.
-  const needsFarmCreate = computed(() => !loading.value && !migrationError.value && !isAdminMode.value && farms.value.length === 0)
+  const needsFarmCreate = computed(() => !loading.value && !isAdminMode.value && farms.value.length === 0)
   const needsFarmSelect = computed(() => !loading.value && !isAdminMode.value && farms.value.length > 0 && !activeFarm.value)
 
   // 최초 1회 자동 연속성: 한 번도 모드를 선택한 적 없고 (내가 접근 가능한) 농장이
@@ -151,15 +100,6 @@ export const useFarmsStore = defineStore('farms', () => {
       activeFarmIdLocal.value = LOCAL_FARM_ID
       rawLoading.value = false
       return
-    }
-
-    try {
-      await migrateLegacyIfNeeded()
-    } catch (e) {
-      console.warn('[farmsStore] 마이그레이션 실패', e)
-      migrationError.value = e
-      rawLoading.value = false
-      return // 농장 목록 구독을 시작하지 않는다 — 불완전한 상태로 UI가 진행되지 않도록.
     }
 
     onSnapshot(
@@ -266,15 +206,10 @@ export const useFarmsStore = defineStore('farms', () => {
 
   // 삭제된 농장의 실제 데이터까지 완전히 지운다. 되돌릴 수 없다.
   async function permanentlyDeleteFarm(id) {
-    const treatSnap = await getDocs(collection(db, 'farms', id, 'treatments'))
-    await Promise.all(treatSnap.docs.map((d) => deleteDoc(d.ref)))
-    // farmData는 구버전(단일 문서) 잔재, 나머지는 도메인별 신버전 문서(src/utils/farmDataSchema.js의
-    // DOMAIN_SYNC) — 마이그레이션 시점과 무관하게 둘 다 지운다(둘 중 하나만 있을 수도 있어서).
-    await Promise.all(
-      ['farmData', ...DOMAIN_KEYS].map((key) => deleteDoc(doc(db, 'farms', id, 'data', key))),
-    )
+    await Promise.all(DOMAIN_KEYS.map((key) => deleteDoc(doc(db, 'farms', id, 'data', key))))
     await deleteDoc(doc(db, 'farms', id, 'data', 'availablePesticide'))
     await deleteDoc(doc(db, 'farms', id, 'data', 'recommendSettings'))
+    await deleteDoc(doc(db, 'farms', id, 'data', 'treatments'))
     // farmId가 이 농장으로 붙은(마이그레이션된) 사진도 같이 지운다. farmId가 없는
     // (마이그레이션 안 된) 사진은 원래도 그랬듯 손대지 않는다 — 어느 농장 것인지
     // 확실하지 않은 걸 지우면 다른 농장이 참조 중인 사진을 지울 위험이 있다.
@@ -312,7 +247,7 @@ export const useFarmsStore = defineStore('farms', () => {
   }
 
   return {
-    farms, deletedFarms, loading, migrationError, accessError, reportAccessError,
+    farms, deletedFarms, loading, accessError, reportAccessError,
     activeFarm, isAdminMode, needsFarmCreate, needsFarmSelect,
     init, createFarm, renameFarm, updateFarmLogo, updateFarmPin, updateFarmOwner, deleteFarm, restoreFarm, permanentlyDeleteFarm,
     selectFarm, enterAdminMode, exitToSelector,

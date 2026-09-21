@@ -25,9 +25,10 @@
 
 이 앱을 유지보수하기 전에 반드시 이해해야 하는 구조적 전제입니다. Firebase Auth(이메일/비밀번호)와 농장 소유권 강제가 도입되어 있지만, **일부 컬렉션은 여전히 의도적으로 전체 공개**입니다 — 어디까지 막혀 있고 어디는 아직 아닌지 구분해서 이해해야 합니다.
 
-- **`farms/{farmId}`와 그 하위(`data/*`, `treatments/*`)는 소유권 + 구성원 권한으로 막혀 있습니다.** `ownerUid`가 없거나(`null`) `visibility`가 `'public'`인 농장은 누구나 읽고 쓸 수 있고, `ownerUid`가 있는 농장은 그 소유자·슈퍼관리자(`users/{uid}.role == 'super_admin'`)·그리고 그 농장의 `members/{uid}` 문서에 도메인별(재배동·작업·문제·재고 등) 권한이 있는 구성원만 접근할 수 있습니다. 규칙 로직은 `firestore.rules`에, 클라이언트 쪽 같은 판단은 `src/utils/farmAccess.js`(`canReadFarmDomain`/`canWriteFarmDomain`)에 있고 **둘은 반드시 같은 논리를 유지해야 합니다.**
+- **`farms/{farmId}`와 그 하위(`data/*`)는 소유권 + 구성원 권한으로 막혀 있습니다.** `farms/{farmId}` 문서 자체엔 `visibility`(`'public'`/`'private'`)만 있고, 실제 소유자 UID는 없습니다 — 그 컬렉션은 농장 선택 화면 때문에 read가 전체 공개라, UID를 거기 두면 로그인 안 한 사람도 그대로 읽어 갑니다. 실제 UID는 `farms/{farmId}/private/owner` 서브문서(소유자 본인·슈퍼관리자만 read)에 분리되어 있습니다. `visibility`가 `'public'`인 농장은 누구나 읽고 쓸 수 있고, `'private'`인 농장은 그 소유자(`private/owner`)·슈퍼관리자(`users/{uid}.role == 'super_admin'`)·그리고 그 농장의 `members/{uid}` 문서에 도메인별(재배동·작업·문제·재고 등) 권한이 있는 구성원만 접근할 수 있습니다. 클라이언트는 "내가 소유자인지"를 `farms` 문서에서 알 수 없어, 로그인 시점에 검증해 둔 `users/{uid}.ownedFarmIds`(`farmMembersStore.js`의 `myOwnedFarmIds`)로 판단합니다. 규칙 로직은 `firestore.rules`에, 클라이언트 쪽 같은 판단은 `src/utils/farmAccess.js`(`canReadFarmDomain`/`canWriteFarmDomain`)에 있고 **둘은 반드시 같은 논리를 유지해야 합니다.**
 - **농장종사자 초대는 최상위 `inviteCodes/{code}` 문서로 이뤄집니다.** 농장주가 권한을 골라 코드를 발급하면(`src/stores/farmMembersStore.js`), 그 코드를 받은 사람이 농장 선택 화면에서 입력해 `farms/{farmId}/members/{uid}`를 그 권한 그대로 생성합니다. 코드는 농장 PIN과 같은 수준의 신뢰 모델(강한 암호화 대상 아님, 엄밀한 1회용 아님)이고, 이메일을 직접 보내는 기능은 없습니다(백엔드가 없어서 카톡 등으로 직접 전달). 구성원이 자기 농장 목록에서 그 농장을 보려면 `users/{uid}.memberFarmIds`(합류할 때 자기 자신이 적어 넣음)를 로그인 시 한 번 확인해 farmsStore의 접근 가능 목록에 합칩니다.
-- **`photos/{id}`는 이제 `farmId`로 농장별 접근을 막습니다.** 저장할 때 그 사진을 올린 농장의 id를 같이 써넣고(`src/stores/farmStore/photos.js`, `backup.js`), 규칙은 `farmId`가 있는 사진만 그 농장(소유자/구성원)으로 접근을 제한합니다. `farmId`가 없는(마이그레이션 전 레거시) 사진은 여전히 전체 공개로 열어둡니다 — 사진 하나가 정확히 몇 개 농장에서 참조되는지 기존 데이터만으로는 확실하지 않은 경우(0개=고아, 2개 이상=중복 참조)가 있어, 그런 애매한 사진은 강제로 귀속시키지 않고 그대로 열어둔 채로 남겨뒀습니다. `where('farmId','==',...)` 조회가 필요한 화면(저장용량 계산 등)은 반드시 이 필터를 써야 합니다 — 필터 없는 `photos` 컬렉션 전체 조회는 이제 규칙이 통째로 거부합니다. **레거시 전역 컬렉션(`shared/farmData`, `shared/availablePesticide`, `shared/recommendPrefs`, 최상위 `treatments/*`)은 슈퍼관리자만 접근 가능하게 잠겨 있습니다** — 이미 완료된 마이그레이션(`farmsStore.js`의 `migrateLegacyIfNeeded`) 이후로는 코드에서 전혀 읽지도 쓰지도 않는 죽은 경로들이라(grep으로 확인) 삭제는 안 하고 열람만 막았습니다. 완전히 새로운(한 번도 마이그레이션 안 한) Firestore 프로젝트를 이 앱에 연결하려면, 그 마이그레이션이 이 문서들을 한 번 읽어야 하므로 슈퍼관리자 계정으로 먼저 로그인한 뒤 앱을 열어야 합니다.
+- **`photos/{id}`는 이제 `farmId`로 농장별 접근을 막습니다.** 저장할 때 그 사진을 올린 농장의 id를 같이 써넣고(`src/stores/farmStore/photos.js`, `backup.js`), 규칙은 `farmId`가 있는 사진만 그 농장(소유자/구성원)으로 접근을 제한합니다. `farmId`가 없는(마이그레이션 전 레거시) 사진은 여전히 전체 공개로 열어둡니다 — 사진 하나가 정확히 몇 개 농장에서 참조되는지 기존 데이터만으로는 확실하지 않은 경우(0개=고아, 2개 이상=중복 참조)가 있어, 그런 애매한 사진은 강제로 귀속시키지 않고 그대로 열어둔 채로 남겨뒀습니다. `where('farmId','==',...)` 조회가 필요한 화면(저장용량 계산 등)은 반드시 이 필터를 써야 합니다 — 필터 없는 `photos` 컬렉션 전체 조회는 이제 규칙이 통째로 거부합니다.
+- **`main` 브랜치가 쓰던 구버전(단일 농장) 레거시 경로는 이 브랜치(dev)에 없습니다.** `shared/farmData`·`shared/availablePesticide`·`shared/recommendPrefs`·최상위 `treatments/*`와 그걸 다중 농장 구조로 옮기던 `migrateLegacyIfNeeded()`(`farmsStore.js`)는 전부 지웠습니다 — 이 브랜치가 배포되는 Firebase 프로젝트(dev)는 처음부터 다중 농장 구조로 시작해서 옮길 대상이 태초부터 없고, 그 확인 자체가 매 접속마다 읽기 2회를 그냥 버리고 있었습니다. **`main`과 이 브랜치는 서로 다른 Firestore 프로젝트를 쓰므로 이 정리가 안전합니다** — 다른 프로젝트에 이 브랜치를 새로 연결한다면(진짜로 처음부터 시작하는 프로젝트가 아니라면) 이 정리가 여전히 맞는지 다시 확인하세요.
 - **농장/시스템관리 PIN은 인증이 아니라 2차 확인일 뿐입니다.** `src/components/FarmSelectScreen.vue`의 PIN 입력은 실수로 다른 농장·관리 모드에 들어가는 걸 막는 가벼운 절차입니다. 시스템 관리(PIN) 자체도 이제 **슈퍼관리자 로그인**이 선행 조건입니다(`handleAdminClick`) — PIN만으로는 더 이상 들어갈 수 없습니다.
 - **소유자 없는 농장은 앞으로도 계속 소유자 없이 남을 수 있습니다.** 일괄 마이그레이션(백필)을 하지 않기로 결정했습니다 — 로그인한 사용자가 농장 목록에서 자신을 소유자로 지정하는 "소유권 주장"만 규칙에서 허용해 뒀고(`farms/{farmId}` update 규칙), 그 위에 얹을 UI는 아직 없습니다. **슈퍼관리자는 시스템 관리 → 농장 관리에서 각 농장을 "수정"하면 소유자 계정 ID를 직접 지정/해제할 수 있습니다**(`FarmManagementPanel.vue`, `farmsStore.updateFarmOwner`) — 공개 농장을 특정 계정에 배정하거나, 소유된 농장을 다른 계정으로 이전하거나, 다시 공개로 되돌릴 때 씁니다. 계정 ID(uid)는 앱 화면 어디에도 노출되지 않으므로 Firebase 콘솔의 Authentication 탭에서 이메일로 찾아야 합니다.
 - **농장종사자 초대 코드는 진짜 1회용입니다.** `farmMembersStore.joinFarmWithCode`가 "코드에 사용자 표시(claimedBy) + 구성원 문서 생성"을 하나의 Firestore 트랜잭션으로 묶고, `firestore.rules`도 이미 누군가 표시해 둔 코드로는 구성원을 못 만들게 막습니다 — 동시에 같은 코드로 참여를 시도해도 한 명만 성공합니다.
@@ -70,10 +71,10 @@ npm run preview  # 빌드 결과 미리보기
 
 | 스토어 | 범위 | Firestore 경로 | 역할 |
 |---|---|---|---|
-| `farmsStore.js` | 전역(농장 목록) | `farms/{farmId}`, 마이그레이션 플래그 `shared/appMeta` | 농장 생성/이름변경/로고/PIN/삭제(소프트)/복원, 관리모드 전환. **농장 "데이터"는 다루지 않음**. 농장 문서의 `ownerUid`(생성자가 로그인 상태였으면 그 uid, 아니면 `null`)/`visibility`(`'private'`\|`'public'`)는 이제 규칙(`firestore.rules`)에서 실제로 접근을 제한한다 — 접근 가능한 농장 목록은 소유권(`farmAccess.canAccessFarm`) **또는** 구성원 자격(`farmMembersStore.myFarmIds`)이 있으면 포함됨 |
-| `farmMembersStore.js` | 농장 1개(구성원 목록) + 전역(내가 속한 농장) | `inviteCodes/{code}`, `farms/{farmId}/members/{uid}`, `farms/{farmId}/inviteCodeRefs/{code}`, `users/{uid}.memberFarmIds` | 농장종사자 초대 코드 발급/폐기, 구성원별 도메인 권한(`canRead`/`canWrite`) 관리. 소유자·슈퍼관리자는 구성원 전체 목록을 구독하고, 일반 구성원은 자기 권한 문서만 구독함 |
+| `farmsStore.js` | 전역(농장 목록) | `farms/{farmId}`, `farms/{farmId}/private/owner` | 농장 생성/이름변경/로고/PIN/삭제(소프트)/복원/소유권 이전, 관리모드 전환. **농장 "데이터"는 다루지 않음**. 농장 문서엔 `visibility`(`'private'`\|`'public'`)만 있고 실제 소유자 UID는 `private/owner` 서브문서에 분리됨(2장 참고) — 접근 가능한 농장 목록은 소유권(`farmAccess.canAccessFarm` + `farmMembersStore.myOwnedFarmIds`) **또는** 구성원 자격(`farmMembersStore.myFarmIds`)이 있으면 포함됨 |
+| `farmMembersStore.js` | 농장 1개(구성원 목록) + 전역(내가 속한/소유한 농장) | `inviteCodes/{code}`, `farms/{farmId}/members/{uid}`, `farms/{farmId}/inviteCodeRefs/{code}`, `farms/{farmId}/private/owner`, `users/{uid}.memberFarmIds`/`ownedFarmIds` | 농장종사자 초대 코드 발급/폐기, 구성원별 도메인 권한(`canRead`/`canWrite`) 관리, 내가 속한/소유한 농장 목록(`myFarmIds`/`myOwnedFarmIds`, 둘 다 로그인 시점에 후보→실제 검증). 소유자·슈퍼관리자는 구성원 전체 목록을 구독하고, 일반 구성원은 자기 권한 문서만 구독함 |
 | `farmStore.js` | 농장 1개 | `farms/{farmId}/data/{facilities,ancillaries,seedlings,tasks,issues,inventory,usageGuides,changeLog}` (도메인별 문서 8개, 6.1 참고) | 재배동·시설장비·묘목·작업·문제·재고·사용법·**변경이력(changeLog)**. 앱에서 가장 크고 중심적인 스토어. `farmStore.js` 자체는 배관(초기화·저장·구독)만 하고, 실제 CRUD는 `src/stores/farmStore/*.js`로 도메인별로 나뉘어 있음(6.1 참고) |
-| `treatmentStore.js` | 농장 1개 | `farms/{farmId}/treatments/{id}` | 방제이력(방제 스프레이 기록). 문서 하나가 아니라 **레코드별 컬렉션**이라 다른 스토어와 저장 방식이 다름 |
+| `treatmentStore.js` | 농장 1개 | `farms/{farmId}/data/treatments` | 방제이력(방제 스프레이 기록). `availablePesticideStore.js`/`recommendSettingsStore.js`와 같은 방식(도메인 문서 1개 + 배열) — `farmStore.js`의 `DOMAIN_SYNC`엔 없고 이 스토어가 독립적으로 관리함 |
 | `availablePesticideStore.js` | 농장 1개 | `farms/{farmId}/data/availablePesticide` | "가용농약" = 구입가능 텍스트 입력 + 재고 데이터를 합쳐서 만든 실사용 가능 농약 목록 |
 | `recommendSettingsStore.js` | 농장 1개(정책) + 기기 로컬(취향) | `farms/{farmId}/data/recommendSettings` | 농약 추천 정책(MOA 충돌일수, 연간 최대 사용횟수 등), 재배 품종, **"초기화 버튼 표시"/"변경이력 삭제 버튼 표시" 같은 농장별 기능 노출 여부** |
 | `appPolicyStore.js` | 전역(모든 농장·모든 기기) | `sharedCache/app:policy` | 농장과 무관한 전역 정책 — **"초기화 기능"/"변경이력 삭제 기능" 자체를 켤지 끌지**, 농약 직접등록 허용 범위, PDF 자동 인쇄 등 |
@@ -122,7 +123,7 @@ async function upsertFacility(payload) {
 
 ⚠️ **주의 (실제로 겪은 문제):** `persist(...)`은 비동기이지만 500ms 디바운스 후에야 실제 Firestore 쓰기가 일어납니다. 자동화 테스트나 스크립트에서 값을 바꾼 뒤 곧바로 브라우저를 닫거나 새로고침하면, 로컬에서는 반영된 것처럼 보여도 **Firestore에는 아직 쓰이지 않아** 다음 로드 때 이전 값으로 되돌아간 것처럼 보일 수 있습니다. 검증할 때는 마지막 변경 후 최소 1~2초 이상 기다린 뒤 새로고침해서 확인하세요.
 
-⚠️ **기존(단일 `farmData` 문서) 농장의 마이그레이션**: `farmStore.js`의 `ensureFarmDocumentsExist(farmId)`가 `init()` 맨 앞에서 한 번 실행됩니다. `facilities` 문서가 이미 있으면(=이미 옮겨진 농장) 아무 것도 안 하고, 없으면 구버전 `farmData` 문서를 읽어 도메인별로 나눠 새 문서 8개를 씁니다. 완전 신규 농장(구버전 문서도 없음)은 기본값으로 채웁니다. **구버전 `farmData` 문서는 안전을 위해 지우지 않고 그대로 남겨둡니다**(`farmsStore.js`의 기존 단일→다중 농장 마이그레이션과 같은 관례). `annualTaskTemplates`는 앱에 고정된 상수라서 이 마이그레이션에서도, 어떤 문서에도 저장하지 않습니다(정규화 시 항상 최신 상수로 덮어씀 — 예전엔 매번 그대로 다시 저장되던 죽은 데이터였습니다).
+⚠️ **새 농장의 도메인 문서 생성**: `farmStore.js`의 `ensureFarmDocumentsExist(farmId)`가 `init()` 맨 앞에서 한 번 실행됩니다. `facilities` 문서가 이미 있으면(=이미 만들어진 농장) 아무 것도 안 하고, 없으면 도메인별 문서 8개를 기본값으로 새로 만듭니다. `annualTaskTemplates`는 앱에 고정된 상수라서 어떤 문서에도 저장하지 않습니다(정규화 시 항상 최신 상수로 덮어씀).
 
 ### 6.2 변경 이력(감사 로그) — `changeLog`
 
@@ -142,8 +143,8 @@ async function upsertFacility(payload) {
 
 - 농장별 백업(`farmStore.exportBackup/restoreBackup`)은 화이트리스트(`BACKUP_ARRAY_KEYS`/`BACKUP_OBJECT_KEYS`) 기반이라, **새 필드를 추가해도 자동으로 백업되지 않습니다** — 백업에 포함시키려면 그 목록에 추가해야 합니다.
 - `changeLog`는 예외적으로 다른 항목처럼 통째로 덮어쓰지 않고, **id 기준으로 현재 값과 합쳐서(merge) 보존**합니다(오래된 백업을 복원해도 그 사이의 최근 이력이 사라지지 않도록). 복원 자체도 changeLog에 "백업 복원" 한 줄을 남깁니다.
-- `treatments`(방제이력)와 `availablePesticide`는 `farmStore` 밖의 별도 스토어 데이터라, `SettingsView.vue`의 `exportBackup()`/`confirmRestore()`에서 **수동으로 합쳐서/나눠서** 처리합니다. 새로운 농장 범위 스토어를 추가한다면 이 두 함수도 같이 고쳐야 합니다.
-- 관리자 전체 백업(`services/adminBackup.js`)은 개별 스토어를 거치지 않고 Firestore 문서를 직접 읽고 씁니다. 농장 데이터는 이제 문서 8개로 나뉘어 있지만(6.1 참고), **백업 파일 형식은 예전과 동일하게 유지**합니다 — 내보낼 때 8개 문서를 하나로 합쳐서(`farmData` 필드 하나에 모든 필드가 든 평면 객체) 담고, 복원할 때 `src/utils/farmDataSchema.js`의 `domainFields()`로 다시 문서별로 나눠 씁니다. 그래서 구버전 관리자 백업 파일도 그대로 복원됩니다. `changeLog`는 복원 시 오래된 스냅샷이 최근 이력을 지우지 않도록 여기서도 별도로 merge 처리를 해줍니다(`restoreAllFarmsBackup` 안의 `changeLog` 병합 코드 참고).
+- `treatments`(방제이력)와 `availablePesticide`는 `farmStore` 밖의 별도 스토어 데이터라, `StorageBackupPanel.vue`의 `exportBackup()`/`confirmRestore()`에서 **수동으로 합쳐서/나눠서** 처리합니다(`treatStore.treatments`/`replaceAllTreatments()`, `apStore.exportData()`/`restoreData()`). 새로운 농장 범위 스토어를 추가한다면 이 두 함수도 같이 고쳐야 합니다.
+- 관리자 전체 백업(`services/adminBackup.js`)은 개별 스토어를 거치지 않고 Firestore 문서를 직접 읽고 씁니다. 농장 데이터는 이제 문서 8개로 나뉘어 있지만(6.1 참고), **백업 파일 형식은 예전과 동일하게 유지**합니다 — 내보낼 때 8개 문서를 하나로 합쳐서(`farmData` 필드 하나에 모든 필드가 든 평면 객체) 담고, 복원할 때 `src/utils/farmDataSchema.js`의 `domainFields()`로 다시 문서별로 나눠 씁니다. `treatments`는 `farmData`엔 없고(`DOMAIN_SYNC` 밖의 독립 문서라 6.1과 같은 이유) 백업 항목에서 따로 담아 `farms/{farmId}/data/treatments`로 그대로 씁니다. `changeLog`는 복원 시 오래된 스냅샷이 최근 이력을 지우지 않도록 여기서도 별도로 merge 처리를 해줍니다(`restoreAllFarmsBackup` 안의 `changeLog` 병합 코드 참고).
 
 ### 6.4 기능 게이팅 2단계 패턴 ("초기화", "변경이력 삭제"가 쓰는 방식)
 
@@ -251,7 +252,7 @@ src/
 │   │   ├── changeLog.js, revert.js, photos.js
 │   │   └── facilities.js, ancillaries.js, seedlings.js, tasks.js, issues.js,
 │   │       usageGuides.js, inventory.js, scheduler.js, backup.js
-│   ├── treatmentStore.js   방제이력(컬렉션 기반, farmData와 별도 저장)
+│   ├── treatmentStore.js   방제이력(도메인 문서 1개+배열, farmData와 별도 저장)
 │   ├── availablePesticideStore.js  가용농약(구입가능목록+재고 병합)
 │   ├── recommendSettingsStore.js   농장별 정책/취향, 기능 노출 스위치
 │   ├── appPolicyStore.js   전역 정책, 파괴적 기능 on/off 스위치

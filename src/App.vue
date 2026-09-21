@@ -62,17 +62,6 @@ useTaskNotifier(store)
   <div class="app-shell">
     <p v-if="farmsStore.loading" class="muted farm-gate-loading">불러오는 중...</p>
 
-    <div v-else-if="farmsStore.migrationError" class="farm-gate">
-      <div class="card farm-gate-card">
-        <h2>불러오기 실패</h2>
-        <p class="muted">
-          농장 데이터를 준비하는 중 문제가 발생했습니다. 기존 데이터는 안전하게 남아있습니다.
-          네트워크 연결을 확인한 뒤 새로고침해 다시 시도해 주세요.
-        </p>
-        <button type="button" @click="() => window.location.reload()">새로고침</button>
-      </div>
-    </div>
-
     <div v-else-if="farmsStore.accessError" class="farm-gate">
       <div class="card farm-gate-card">
         <h2>접근 권한이 바뀌었습니다</h2>

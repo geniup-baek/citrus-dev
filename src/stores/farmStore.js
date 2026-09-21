@@ -205,22 +205,15 @@ export const useFarmStore = defineStore('farm', () => {
     )
   }
 
-  // 이 농장이 아직 신버전(도메인별) 문서로 옮겨지지 않았으면 한 번만 옮긴다.
-  // - 완전 신규 농장(구버전 문서도 없음): 각 문서를 기본값으로 새로 만든다.
-  // - 기존 농장(구버전 farmData 문서 있음): 그 데이터를 도메인별로 나눠 옮겨 쓴다.
-  // 구버전 farmData 문서는 안전을 위해 지우지 않고 그대로 남겨둔다(farmsStore.js의 기존
-  // 마이그레이션 관례와 동일 — 되돌아갈 여지를 남겨둔다).
+  // 새 농장이면(도메인 문서가 아직 하나도 없으면) 각 도메인 문서를 기본값으로 만든다.
   async function ensureFarmDocumentsExist(farmId) {
     const facilitiesSnap = await getDoc(doc(db, 'farms', farmId, 'data', 'facilities'))
-    if (facilitiesSnap.exists()) return // 이미 신버전으로 옮겨진 농장
+    if (facilitiesSnap.exists()) return // 이미 만들어진 농장
 
-    const legacySnap = await getDoc(doc(db, 'farms', farmId, 'data', 'farmData'))
-    const legacy = legacySnap.exists() ? legacySnap.data() : null
     const now = new Date().toISOString()
-
     await Promise.all(
       DOMAIN_KEYS.map((key) => {
-        const payload = DOMAIN_SYNC[key](legacy)
+        const payload = DOMAIN_SYNC[key](null)
         payload.updatedAt = now
         return setDoc(doc(db, 'farms', farmId, 'data', key), payload)
       }),

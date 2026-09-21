@@ -1,9 +1,7 @@
 import {
   collection, doc, getDoc, getDocs, setDoc,
 } from 'firebase/firestore'
-import { doc as liteDoc, writeBatch as liteWriteBatch } from 'firebase/firestore/lite'
-import { db, dbLite } from './firebase.js'
-import { uuid } from '../utils/uuid.js'
+import { db } from './firebase.js'
 import { DOMAIN_KEYS, domainFields } from '../utils/farmDataSchema.js'
 import { canAccessFarm } from '../utils/farmAccess.js'
 import { useAuthStore } from '../stores/authStore.js'
@@ -61,7 +59,7 @@ export async function exportAllFarmsBackup() {
         Promise.all(DOMAIN_KEYS.map((key) => getDoc(doc(db, 'farms', farmId, 'data', key)))),
         getDoc(doc(db, 'farms', farmId, 'data', 'availablePesticide')),
         getDoc(doc(db, 'farms', farmId, 'data', 'recommendSettings')),
-        getDocs(collection(db, 'farms', farmId, 'treatments')),
+        getDoc(doc(db, 'farms', farmId, 'data', 'treatments')),
       ])
       const farmData = {}
       let hasAnyDomainDoc = false
@@ -76,7 +74,7 @@ export async function exportAllFarmsBackup() {
         farmData: hasAnyDomainDoc ? farmData : null,
         availablePesticide: apSnap.exists() ? apSnap.data() : null,
         recommendSettings: recSnap.exists() ? recSnap.data() : null,
-        treatments: treatSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
+        treatments: Array.isArray(treatSnap.data()?.treatments) ? treatSnap.data().treatments : [],
       }
     } catch (e) {
       console.warn('[adminBackup] 농장 백업 실패', farmId, e)
@@ -194,26 +192,14 @@ export async function restoreAllFarmsBackup(payload) {
         await setDoc(doc(db, 'farms', farmId, 'data', 'recommendSettings'), farmPayload.recommendSettings, { merge: true })
       }
       if (Array.isArray(farmPayload.treatments)) {
-        // writeBatch(일반 db)도 실시간 리스너용 영속 Write 스트림을 같이 쓰기 때문에, 대량
-        // 복원에서는 배치로 건수를 줄여도 그 스트림 자체의 "대기 가능한 쓰기 수" 한도에 걸려
-        // "Write stream exhausted maximum allowed queued writes" 오류가 난 게 이 때문이다
-        // (farmStore/backup.js의 사진 복원과 같은 문제, 실측으로 확인됨). firestore/lite는
-        // 스트림이 아니라 매 커밋마다 일반 HTTP 요청으로 끝나므로 그 한도가 적용되지 않는다.
-        const BATCH_SIZE = 400 // Firestore 배치 한도(500)보다 여유 있게
-        const existing = await getDocs(collection(db, 'farms', farmId, 'treatments'))
-        for (let i = 0; i < existing.docs.length; i += BATCH_SIZE) {
-          const batch = liteWriteBatch(dbLite)
-          for (const d of existing.docs.slice(i, i + BATCH_SIZE)) batch.delete(liteDoc(dbLite, d.ref.path))
-          await batch.commit()
-        }
-        for (let i = 0; i < farmPayload.treatments.length; i += BATCH_SIZE) {
-          const batch = liteWriteBatch(dbLite)
-          for (const t of farmPayload.treatments.slice(i, i + BATCH_SIZE)) {
-            const { id, ...rest } = t
-            batch.set(liteDoc(dbLite, 'farms', farmId, 'treatments', id || uuid()), rest)
-          }
-          await batch.commit()
-        }
+        // 다른 도메인 문서와 같은 방식(배열 하나)으로 저장되므로 통째로 한 번에 쓴다 —
+        // 레코드별 문서였을 때 필요했던 대량 배치 삭제·재생성(및 그 때문에 쓰던 firestore/lite)이
+        // 더는 필요 없다.
+        await setDoc(
+          doc(db, 'farms', farmId, 'data', 'treatments'),
+          { treatments: farmPayload.treatments, updatedAt: new Date().toISOString() },
+          { merge: true },
+        )
       }
     } catch (e) {
       console.warn('[adminBackup] 농장 복원 실패', farmId, e)
