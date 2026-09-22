@@ -66,12 +66,33 @@ async function submitInvite() {
   issuedCode.value = await farmMembersStore.createInviteCode(JSON.parse(JSON.stringify(invitePermissions)))
 }
 
+// navigator.clipboard는 보안 컨텍스트(HTTPS 또는 localhost)에서만 제공된다 —
+// 예를 들어 LAN IP로 연 개발 서버(http://192.168.x.x:...)처럼 비보안 컨텍스트에서는
+// 아예 없거나 호출이 거부된다(src/utils/uuid.js의 crypto.randomUUID 처리와 같은 문제).
+// 옛 방식(execCommand('copy'))은 보안 컨텍스트가 아니어도 대부분 브라우저에서 동작해서
+// 그걸로 한 번 더 시도한 뒤에야 진짜 실패로 본다.
+function legacyCopy(code) {
+  const textarea = document.createElement('textarea')
+  textarea.value = code
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  try {
+    return document.execCommand('copy')
+  } finally {
+    textarea.remove()
+  }
+}
+
 async function copyCode(code) {
   try {
+    if (!navigator.clipboard?.writeText) throw new Error('clipboard API unavailable')
     await navigator.clipboard.writeText(code)
     copyMessage.value = '복사했습니다.'
   } catch {
-    copyMessage.value = '복사에 실패했습니다. 직접 선택해 복사해 주세요.'
+    copyMessage.value = legacyCopy(code) ? '복사했습니다.' : '복사에 실패했습니다. 직접 선택해 복사해 주세요.'
   }
   setTimeout(() => { copyMessage.value = '' }, 2000)
 }
@@ -96,7 +117,10 @@ async function confirmRevokeCode(code) {
     <ul v-if="farmMembersStore.members.length" class="list clean">
       <li v-for="member in farmMembersStore.members" :key="member.uid" class="list-item settings-item member-item">
         <div class="member-item-head">
-          <span class="settings-item-name">{{ member.displayName || member.email || member.uid }}</span>
+          <span class="settings-item-name">
+            {{ member.displayName || member.email || member.uid }}
+            <span v-if="member.email && member.displayName" class="muted text-sm"> · {{ member.email }}</span>
+          </span>
           <div class="row-actions">
             <button class="ghost compact-btn" type="button" @click="setMemberAll(member, 'read', true)">전체 읽기</button>
             <button class="ghost compact-btn" type="button" @click="setMemberAll(member, 'write', true)">전체 쓰기</button>
@@ -176,6 +200,13 @@ async function confirmRevokeCode(code) {
   justify-content: space-between;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+/* 이름 옆에 이메일까지 붙으면(구성원은 이름이 겹칠 수 있어 병행 표시) 좁은 화면에서
+   .settings-item-name(전역 규칙: min-width: 0 + word-break: break-all)이 글자
+   하나씩 쪼개질 만큼 찌그러들 수 있다 — 이름 줄을 항상 자기 줄로 밀어내 버튼 줄과
+   분리한다. */
+.member-item-head .settings-item-name {
+  flex-basis: 100%;
 }
 .permission-grid {
   gap: 0.25rem;
