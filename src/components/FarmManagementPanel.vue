@@ -130,12 +130,17 @@ async function submitNewFarm() {
     </p>
 
     <ul class="list clean">
-      <li v-for="farm in farmsStore.farms" :key="farm.id" class="list-item settings-item farm-manage-item">
+      <li
+        v-for="farm in farmsStore.farms"
+        :key="farm.id"
+        class="list-item settings-item farm-manage-item"
+        :class="{ 'settings-item-editing': editingFarmId === farm.id }"
+      >
         <template v-if="editingFarmId === farm.id">
           <input v-model="farmEditName" class="settings-edit-input" type="text" placeholder="농장 이름" @keydown.enter.prevent="saveFarmName(farm.id, farmOwnerUids[farm.id])" @keydown.escape.prevent="cancelEditFarm" />
           <input v-model="farmEditPin" class="settings-edit-input" type="text" inputmode="numeric" placeholder="PIN (선택, 비우면 해제)" style="max-width: 11rem;" @keydown.enter.prevent="saveFarmName(farm.id, farmOwnerUids[farm.id])" @keydown.escape.prevent="cancelEditFarm" />
           <input v-model="farmEditOwnerUid" class="settings-edit-input" type="text" placeholder="소유자 계정 ID (비우면 공개 농장)" style="max-width: 16rem;" @keydown.enter.prevent="saveFarmName(farm.id, farmOwnerUids[farm.id])" @keydown.escape.prevent="cancelEditFarm" />
-          <p class="muted text-sm">계정 ID는 Firebase 콘솔 → Authentication에서 이메일로 찾을 수 있습니다(이메일이 아니라 ID를 입력해야 합니다).</p>
+          <p class="muted text-sm" style="flex-basis: 100%; margin: 0;">계정 ID는 Firebase 콘솔 → Authentication에서 이메일로 찾을 수 있습니다(이메일이 아니라 ID를 입력해야 합니다).</p>
           <label class="ghost compact-btn">
             로고 변경
             <input accept="image/*" type="file" hidden @change="(e) => handleFarmLogoChange(farm.id, e)" />
