@@ -1,6 +1,6 @@
-// firestore.rules 의 canAccessFarm/isPublicFarm/isOwner/isSuperAdmin 과 반드시 같은 논리를
-// 유지해야 한다 — 여긴 "목록에 보일지"를 판단하는 클라이언트 쪽 판단일 뿐이고, 실제 접근
-// 통제는 규칙이 한다. 규칙을 바꾸면 이 파일도 같이 바꿔야 한다.
+// firestore.rules 의 canAccessFarm/isOwner/isSuperAdmin 과 반드시 같은 논리를 유지해야
+// 한다 — 여긴 "목록에 보일지"를 판단하는 클라이언트 쪽 판단일 뿐이고, 실제 접근 통제는
+// 규칙이 한다. 규칙을 바꾸면 이 파일도 같이 바꿔야 한다.
 //
 // ⚠ 딱 한 곳은 의도적으로 규칙과 다르다: 규칙의 canAccessFarm은 "농장 문서 자체가
 // 없으면"(정리 중인 상태) 접근을 허용하지만, 여기 canAccessFarm(farm, ...)에 farm이
@@ -9,22 +9,13 @@
 // 생긴다. 그래서 여기는 false로 안전한 쪽을 택한다(어차피 이 함수가 실제 접근을
 // 막는 게 아니라 UI 표시만 판단하므로, 서버 쪽 정리 시나리오와는 무관하다).
 //
-// ⚠ ownerUid(실제 Firebase UID)는 farm 문서에 없다 — farms 컬렉션은 농장 선택
-// 화면 때문에 read가 완전히 열려 있어서, 거기 있는 필드는 로그인 안 한 사람도
-// 그대로 읽어 간다(firestore.rules의 farms/{farmId} 주석 참고). 실제 UID는
-// farms/{farmId}/private/owner 서브문서로 분리했고, 그 문서는 소유자 본인·
-// 슈퍼관리자만 읽을 수 있다. 그래서 "이 농장이 내 것인지"는 서버 쪽 소유권
-// 판단과 별도로, 로그인 시점에 검증해 둔 ownedFarmIds 목록(farmMembersStore.js의
-// myOwnedFarmIds, memberFarmIds/myFarmIds와 같은 패턴)으로 판단한다.
-export function isPublicFarm(farm) {
-  return (farm?.visibility ?? 'private') === 'public'
-}
-
-export function canAccessFarm(farm, { isSuperAdmin = false, ownedFarmIds = [] } = {}) {
+// 공개 농장 개념이 없어서(모든 농장은 소유자가 있음), farms/{farmId}는 소유자·
+// 구성원·슈퍼관리자만 애초에 읽을 수 있다(firestore.rules) — 그래서 ownerUid를
+// 그대로 farm 문서에 두고 uid만 비교하면 된다(예전처럼 서브문서로 숨길 필요 없음).
+export function canAccessFarm(farm, { uid = null, isSuperAdmin = false } = {}) {
   if (!farm) return false
-  if (isPublicFarm(farm)) return true
   if (isSuperAdmin) return true
-  return ownedFarmIds.includes(farm.id)
+  return !!uid && farm.ownerUid === uid
 }
 
 // 농장종사자 기능별 권한. 도메인 키는 src/utils/farmDataSchema.js의 DOMAIN_KEYS와
@@ -44,15 +35,15 @@ export function memberPermission(member, domain, mode) {
 
 // docId가 'changeLog'면 구성원이기만 하면 항상 허용 — firestore.rules의
 // canReadFarmDomain/canWriteFarmDomain과 반드시 같은 논리를 유지해야 한다.
-export function canReadFarmDomain(farm, docId, { isSuperAdmin = false, ownedFarmIds = [], member = null } = {}) {
-  if (canAccessFarm(farm, { isSuperAdmin, ownedFarmIds })) return true
+export function canReadFarmDomain(farm, docId, { uid = null, isSuperAdmin = false, member = null } = {}) {
+  if (canAccessFarm(farm, { uid, isSuperAdmin })) return true
   if (!member) return false
   if (docId === 'changeLog') return true
   return memberPermission(member, docId, 'read') || memberPermission(member, docId, 'write')
 }
 
-export function canWriteFarmDomain(farm, docId, { isSuperAdmin = false, ownedFarmIds = [], member = null } = {}) {
-  if (canAccessFarm(farm, { isSuperAdmin, ownedFarmIds })) return true
+export function canWriteFarmDomain(farm, docId, { uid = null, isSuperAdmin = false, member = null } = {}) {
+  if (canAccessFarm(farm, { uid, isSuperAdmin })) return true
   if (!member) return false
   if (docId === 'changeLog') return true
   return memberPermission(member, docId, 'write')

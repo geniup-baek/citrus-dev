@@ -26,20 +26,20 @@ function emptyPermissions() {
 export const useFarmMembersStore = defineStore('farmMembers', () => {
   const authStore = useAuthStore()
 
-  // ── 전역(농장 무관): 내가 속한 농장 목록 ─────────────────────────────────────
+  // ── 전역(농장 무관): 내가 구성원으로 속한 농장 목록 ───────────────────────────
   const myFarmIds = ref([])
   const myFarmIdsLoading = ref(true)
-  // 내가 소유자인 농장 목록. farms/{farmId} 문서엔 이제 ownerUid가 없어서(전역
-  // 노출 방지, firestore.rules 참고) 클라이언트가 "이 농장이 내 것인지"를 농장
-  // 목록만 보고는 판단할 수 없다 — myFarmIds와 완전히 같은 패턴으로 별도 관리한다.
-  const myOwnedFarmIds = ref([])
-  const myOwnedFarmIdsLoading = ref(true)
   let globalInitialized = false
 
-  // users/{uid}.memberFarmIds는 "후보" 목록일 뿐이다(구성원에서 빠졌는데 아직 안
-  // 지워졌을 수 있음) — 실제로 그 농장의 members/{uid} 문서가 지금도 있는지 하나씩
-  // 확인해서만 accessibleFarms에 반영한다. 구성원 변경이 잦지 않은 앱이라 로그인
-  // 시점 1회 확인이면 충분하다(다른 농장별 스토어처럼 실시간 구독까지는 안 함).
+  // ⚠ farms/{farmId}/members 컬렉션그룹을 내 uid로 직접 걸러 찾는 방식(where('uid',
+  // '==',내 uid))을 시도했으나 실측으로 거부됨을 확인했다 — firestore.rules의
+  // members list 규칙에 있는 isOwner(farmId) 항이 문서마다 다른 farmId(경로)에
+  // 의존해서, Firestore가 "쿼리 결과 전체에 대해 증명 가능"을 판단할 때 그 항
+  // 때문에 전체를 증명 불가로 본다(다른 항이 uid로 이미 걸려 있어도 소용없음).
+  // 그래서 users/{uid}.memberFarmIds는 "후보" 목록으로 남겨둔다(구성원에서
+  // 빠졌는데 아직 안 지워졌을 수 있음) — 실제로 그 농장의 members/{uid} 문서가
+  // 지금도 있는지 하나씩 확인해서만 반영한다. 구성원 변경이 잦지 않은 앱이라
+  // 로그인 시점 1회 확인이면 충분하다(다른 농장별 스토어처럼 실시간 구독까지는 안 함).
   async function refreshMyFarmIds() {
     const uid = authStore.user?.uid
     if (!firebaseEnabled || !db || !uid) {
@@ -65,46 +65,11 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
     }
   }
 
-  // users/{uid}.ownedFarmIds도 memberFarmIds와 같은 이유로 "후보" 목록일 뿐이다
-  // (소유권 이전으로 남에게 넘어갔는데 이전 소유자 쪽 배열 정리가 최선 노력이라
-  // 늦게 지워지거나 안 지워질 수 있음) — 실제로 지금도 내가 소유자로 적힌
-  // private/owner 문서가 있는지 하나씩 읽어서(권한 없으면 거부 에러가 나므로
-  // catch로 걸러낸다) 검증한 것만 인정한다.
-  async function refreshMyOwnedFarmIds() {
-    const uid = authStore.user?.uid
-    if (!firebaseEnabled || !db || !uid) {
-      myOwnedFarmIds.value = []
-      myOwnedFarmIdsLoading.value = false
-      return
-    }
-    myOwnedFarmIdsLoading.value = true
-    try {
-      const userSnap = await getDoc(doc(db, 'users', uid))
-      const candidates = Array.isArray(userSnap.data()?.ownedFarmIds) ? userSnap.data().ownedFarmIds : []
-      const verified = []
-      for (const farmId of candidates) {
-        try {
-          const ownerSnap = await getDoc(doc(db, 'farms', farmId, 'private', 'owner'))
-          if (ownerSnap.exists() && ownerSnap.data()?.ownerUid === uid) verified.push(farmId)
-        } catch {
-          // 더 이상 내 소유가 아니면 읽기 자체가 거부된다 — 후보에서 제외.
-        }
-      }
-      myOwnedFarmIds.value = verified
-    } catch (e) {
-      console.warn('[farmMembersStore] 소유 농장 목록 확인 실패', e)
-      myOwnedFarmIds.value = []
-    } finally {
-      myOwnedFarmIdsLoading.value = false
-    }
-  }
-
   function initGlobal() {
     if (globalInitialized) return
     globalInitialized = true
     if (!firebaseEnabled || !db) {
       myFarmIdsLoading.value = false
-      myOwnedFarmIdsLoading.value = false
       return
     }
     // authStore.loading은 앱 시작 시 딱 한 번만 true→false로 바뀐다(그 뒤로는 계속
@@ -116,7 +81,6 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
       ([loading]) => {
         if (loading) return
         refreshMyFarmIds()
-        refreshMyOwnedFarmIds()
       },
       { immediate: true },
     )
@@ -140,7 +104,7 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
     perFarmInitialized = farmId
     activeFarmId.value = farmId
     activeFarm.value = farm || null
-    isOwnerOfActiveFarm.value = myOwnedFarmIds.value.includes(farmId)
+    isOwnerOfActiveFarm.value = !!(authStore.user?.uid && farm?.ownerUid === authStore.user.uid)
     members.value = []
     myMembership.value = null
     inviteCodeRefs.value = []
@@ -174,11 +138,11 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
 
   const myPermissions = computed(() => myMembership.value?.permissions || null)
 
-  // 소유자·슈퍼관리자·공개농장이면 도메인별 권한 확인 없이 항상 전체 접근 —
-  // farmStore.js 등이 "이 농장은 문서 시딩/구독을 도메인별로 걸러야 하는지"를
-  // 판단하는 데 쓴다(구성원만 걸러야 하고, 이 경우는 걸러선 안 됨).
+  // 소유자·슈퍼관리자면 도메인별 권한 확인 없이 항상 전체 접근 — farmStore.js 등이
+  // "이 농장은 문서 시딩/구독을 도메인별로 걸러야 하는지"를 판단하는 데 쓴다
+  // (구성원만 걸러야 하고, 이 경우는 걸러선 안 됨).
   const hasFullAccess = computed(() =>
-    canAccessFarm(activeFarm.value, { isSuperAdmin: authStore.isSuperAdmin, ownedFarmIds: myOwnedFarmIds.value }))
+    canAccessFarm(activeFarm.value, { uid: authStore.user?.uid, isSuperAdmin: authStore.isSuperAdmin }))
 
   // 다른 농장별 스토어(farmStore/treatmentStore/...)가 "내 권한 확인이 끝났는지"를
   // 기다리는 용도. hasFullAccess면 애초에 기다릴 필요가 없어 즉시 끝난 것으로 본다.
@@ -195,14 +159,14 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
     return canReadFarmDomain(
       activeFarm.value,
       domain,
-      { isSuperAdmin: authStore.isSuperAdmin, ownedFarmIds: myOwnedFarmIds.value, member: myMembership.value },
+      { uid: authStore.user?.uid, isSuperAdmin: authStore.isSuperAdmin, member: myMembership.value },
     )
   }
   function canWrite(domain) {
     return canWriteFarmDomain(
       activeFarm.value,
       domain,
-      { isSuperAdmin: authStore.isSuperAdmin, ownedFarmIds: myOwnedFarmIds.value, member: myMembership.value },
+      { uid: authStore.user?.uid, isSuperAdmin: authStore.isSuperAdmin, member: myMembership.value },
     )
   }
 
@@ -235,9 +199,6 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
     const farmId = activeFarmId.value
     if (!farmId) return
     await deleteDoc(doc(db, 'farms', farmId, 'members', memberUid))
-    // 본인 것이 아니라 소유자 권한으로 지우는 경우가 대부분이라, 상대의 users/{uid}
-    // 문서는(본인만 쓸 수 있어) 여기서 못 건드린다 — memberFarmIds에 남은 항목은
-    // refreshMyFarmIds가 다음 로그인 때 members 문서 존재 여부로 스스로 걸러낸다.
   }
 
   // ── 구성원 액션(참여) ────────────────────────────────────────────────────
@@ -260,7 +221,10 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
         const data = codeSnap.data()
         if (data.claimedBy) throw new Error('이미 사용된 코드입니다.')
         transaction.update(codeRef, { claimedBy: uid, claimedAt: new Date().toISOString() })
+        // uid는 문서 id와 중복이지만 규칙(members create)이 이 값을 request.auth.uid와
+        // 같도록 강제해 둔다 — 문서만 보고도(예: 관리자 콘솔) 소유자를 바로 알 수 있다.
         transaction.set(doc(db, 'farms', data.farmId, 'members', uid), {
+          uid,
           permissions: data.permissions,
           email: authStore.user.email || '',
           displayName: authStore.user.displayName || '',
@@ -283,7 +247,7 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
   }
 
   return {
-    myFarmIds, myFarmIdsLoading, myOwnedFarmIds, myOwnedFarmIdsLoading, refreshMyOwnedFarmIds, initGlobal,
+    myFarmIds, myFarmIdsLoading, initGlobal,
     activeFarmId, isOwnerOfActiveFarm, members, myMembership, myPermissions, inviteCodeRefs, perFarmLoading,
     hasFullAccess, ready,
     init, canRead, canWrite,

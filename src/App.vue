@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, watch } from 'vue'
 import AppHeader from './components/AppHeader.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import FarmSelectScreen from './components/FarmSelectScreen.vue'
+import LoginScreen from './components/LoginScreen.vue'
 import { useFarmStore } from './stores/farmStore'
 import { useLocaleStore } from './stores/localeStore'
 import { useTreatmentStore } from './stores/treatmentStore'
@@ -25,14 +26,25 @@ const policyStore = useAppPolicyStore()
 const authStore = useAuthStore()
 
 onMounted(() => {
-  farmsStore.init()
-  // 전 기기 공통 정책은 농장 선택과 무관하므로 관리 모드에서도 바로 동기화한다.
-  policyStore.init()
-  // 분류·항목(appSettings)도 모든 농장이 공유하므로 관리 모드에서도 실시간 데이터를 읽어야 한다.
-  store.initAppSettings()
-  // 로그인 상태도 농장 선택과 무관하게 앱 시작 시 한 번 구독한다.
+  // 로그인 여부부터 확정해야 한다 — 로그인 필수 앱이라, 로그인 안 된 상태에선
+  // farms/shared/sharedCache 등 어떤 것도 구독을 시도하지 않는다(규칙이 전부
+  // request.auth != null을 요구해서 시도해도 거부될 뿐이다).
   authStore.init()
 })
+
+watch(
+  () => [authStore.loading, authStore.isLoggedIn, store.firebaseEnabled],
+  ([authLoading, isLoggedIn, firebaseEnabled]) => {
+    if (authLoading) return
+    if (firebaseEnabled && !isLoggedIn) return // 로그인 화면만 보여준다.
+    farmsStore.init()
+    // 전 기기 공통 정책은 농장 선택과 무관하므로 관리 모드에서도 바로 동기화한다.
+    policyStore.init()
+    // 분류·항목(appSettings)도 모든 농장이 공유하므로 관리 모드에서도 실시간 데이터를 읽어야 한다.
+    store.initAppSettings()
+  },
+  { immediate: true },
+)
 
 // 활성 농장이 (비동기로) 정해지는 시점에 딱 한 번 농장별 데이터 스토어를 초기화한다.
 // 농장 전환은 앱 새로고침으로 처리하므로 세션 중 activeFarm.id가 다시 바뀌는 일은 없다.
@@ -60,7 +72,11 @@ useTaskNotifier(store)
 
 <template>
   <div class="app-shell">
-    <p v-if="farmsStore.loading" class="muted farm-gate-loading">불러오는 중...</p>
+    <p v-if="authStore.loading" class="muted farm-gate-loading">불러오는 중...</p>
+
+    <LoginScreen v-else-if="store.firebaseEnabled && !authStore.isLoggedIn" />
+
+    <p v-else-if="farmsStore.loading" class="muted farm-gate-loading">불러오는 중...</p>
 
     <div v-else-if="farmsStore.accessError" class="farm-gate">
       <div class="card farm-gate-card">

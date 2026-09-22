@@ -14,8 +14,14 @@ import {
 } from 'firebase/auth'
 import { doc, getDoc, setDoc } from 'firebase/firestore'
 import { auth, db, firebaseEnabled, liteAuth } from '../services/firebase.js'
+import { LS_PREFIX } from '../utils/storagePrefix.js'
 
 const DOC_COLLECTION = 'users'
+// farmsStore.js가 쓰는 것과 같은 키(순환 참조를 피하려고 여기서 상수만 다시 씀) —
+// 로그아웃 시 "마지막으로 쓰던 농장" 기억을 지워서, 로그아웃하기 전까지만 유지된다는
+// 요구사항을 지키고 다음에 다른 계정으로 로그인했을 때 남의 농장 선택이 남지 않게 한다.
+const LS_ACTIVE = `${LS_PREFIX}:active-farm`
+const LS_MODE = `${LS_PREFIX}:app-mode`
 
 const ERROR_MESSAGES = {
   'auth/email-already-in-use': '이미 가입된 이메일입니다.',
@@ -120,6 +126,11 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = ''
     try {
       await signOut(auth)
+      // 로그인이 필수인 앱이라, 로그아웃하면 "마지막으로 쓰던 농장" 기억도 같이
+      // 지운다 — 로그아웃 전까지만 유지되어야 하고, 다음에 다른 계정으로 로그인해도
+      // 이전 계정의 농장 선택이 남아있으면 안 된다.
+      localStorage.removeItem(LS_ACTIVE)
+      localStorage.setItem(LS_MODE, '')
       // 이 앱은 상태 전환마다 항상 새로고침한다(farmsStore의 selectFarm/enterAdminMode/
       // exitToSelector와 동일한 관례) — 로그아웃을 새로고침 없이 진행 중인 화면에서
       // 그대로 두면, 실시간 구독이 조용히 거부되고 그 뒤의 수정이 로컬에만 남아

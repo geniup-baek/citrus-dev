@@ -2,14 +2,12 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import {
   collection, doc, getDoc, getDocs, onSnapshot, setDoc, deleteDoc, deleteField, query, where,
-  writeBatch, arrayUnion, arrayRemove,
 } from 'firebase/firestore'
 import { db, firebaseEnabled } from '../services/firebase.js'
 import { uuid } from '../utils/uuid.js'
 import { DOMAIN_KEYS } from '../utils/farmDataSchema.js'
 import { useAuthStore } from './authStore.js'
 import { useFarmMembersStore } from './farmMembersStore.js'
-import { canAccessFarm } from '../utils/farmAccess.js'
 import { LS_PREFIX } from '../utils/storagePrefix.js'
 
 const LS_ACTIVE = `${LS_PREFIX}:active-farm`
@@ -19,15 +17,21 @@ const LOCAL_FARM_ID = 'local' // Firebase 비활성(로컬 전용) 환경에서 
 export const useFarmsStore = defineStore('farms', () => {
   const authStore = useAuthStore()
   const farmMembersStore = useFarmMembersStore()
-  const allFarms = ref([]) // 삭제(휴지통 보관) 포함 전체 농장 문서(접근 가능 여부 무관)
-  // 농장 목록 구독 자체의 로딩 상태. 로그인 여부·구성원 자격이 확정되기 전엔
-  // (authStore.loading / farmMembersStore.myFarmIdsLoading) 접근 가능한 농장을
-  // 잘못 판단할 수 있어(내 농장이 일시적으로 안 보임), 아래 loading은 셋 다 끝나야
-  // false가 된다.
-  const rawLoading = ref(true)
+
+  // 공개 농장이 없다 — 농장은 항상 정확히 1명의 소유자를 가지고, 로그인해야만
+  // 접근 가능하다. 그래서 "전체 농장 목록을 열어두고 클라이언트가 필터링"하는
+  // 대신, 애초에 서버가 "내가 접근 가능한 농장만" 돌려주는 쿼리 2개를 합친다:
+  //   1) ownedFarmsRaw — where('ownerUid','==',내 uid)로 실시간 구독(슈퍼관리자는
+  //      필터 없이 전체 구독). firestore.rules가 이 쿼리 자체를 증명 가능하게 허용한다.
+  //   2) memberFarmDocs — farmMembersStore.myFarmIds(내가 구성원인 농장 id 목록,
+  //      컬렉션그룹 쿼리로 구함)에 있지만 위 1)에 없는 것만 개별 조회.
+  const ownedFarmsRaw = ref([])
+  const memberFarmDocs = ref([])
+  const ownedLoading = ref(true)
+  const memberDocsLoading = ref(true)
   const loading = computed(() =>
-    rawLoading.value || (firebaseEnabled
-      && (authStore.loading || farmMembersStore.myFarmIdsLoading || farmMembersStore.myOwnedFarmIdsLoading)))
+    ownedLoading.value || memberDocsLoading.value
+    || (firebaseEnabled && (authStore.loading || farmMembersStore.myFarmIdsLoading)))
   const initialized = ref(false)
   // 농장 관련 실시간 구독이 거부당했을 때(예: 로그아웃 경합, 소유권 변경) 채워진다.
   // App.vue가 이 값이 있으면 "새로고침해 주세요" 카드를 띄운다.
@@ -37,19 +41,16 @@ export const useFarmsStore = defineStore('farms', () => {
     accessError.value = err
   }
 
-  // firestore.rules의 소유권 판단과 반드시 같은 로직(farmAccess.js)으로 걸러낸다 —
-  // 로그인 안 했거나 남이 소유한 농장은 목록에 나타나지 않는다. 구성원으로 합류한
-  // 농장(farmMembersStore.myFarmIds)도 소유권과 별개로 포함시킨다.
-  const accessibleFarms = computed(() =>
-    allFarms.value.filter((f) =>
-      canAccessFarm(f, { isSuperAdmin: authStore.isSuperAdmin, ownedFarmIds: farmMembersStore.myOwnedFarmIds })
-      || farmMembersStore.myFarmIds.includes(f.id)),
-  )
+  const allFarms = computed(() => {
+    const ownedIds = new Set(ownedFarmsRaw.value.map((f) => f.id))
+    const extra = memberFarmDocs.value.filter((f) => !ownedIds.has(f.id))
+    return [...ownedFarmsRaw.value, ...extra].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  })
   // 화면 전반(선택화면·헤더·라우터 등)에서 쓰는 목록은 삭제된 농장을 제외한다.
-  const farms = computed(() => accessibleFarms.value.filter((f) => !f.deletedAt))
+  const farms = computed(() => allFarms.value.filter((f) => !f.deletedAt))
   // 삭제(휴지통 보관)된 농장 — 최근 삭제 순으로 정렬. 설정의 "삭제된 농장" 섹션에서만 사용.
   const deletedFarms = computed(() =>
-    accessibleFarms.value
+    allFarms.value
       .filter((f) => f.deletedAt)
       .sort((a, b) => (b.deletedAt || '').localeCompare(a.deletedAt || '')),
   )
@@ -62,20 +63,20 @@ export const useFarmsStore = defineStore('farms', () => {
 
   const isAdminMode = computed(() => modeLocal.value === 'admin')
 
+  // 로그인이 되어 있고 이 기기에 마지막으로 쓰던 농장이 남아 있으면(로그아웃하기
+  // 전까지 계속 유지) 선택 화면 없이 바로 그 농장으로 들어간다 — activeFarmIdLocal이
+  // farms 목록에 남아있는 한(=지금도 접근 가능) 항상 성립한다.
   const activeFarm = computed(() => {
     if (isAdminMode.value) return null
     return farms.value.find((f) => f.id === activeFarmIdLocal.value) || null
   })
 
-  // 마이그레이션이 실패했는데 농장이 0개로 보이면 "새 농장 만들기"를 띄우지 않는다 —
-  // 기존 데이터가 남아있는 채로 새 빈 농장을 만들게 되는 혼란을 막기 위함. 새로고침 재시도를 유도한다.
   const needsFarmCreate = computed(() => !loading.value && !isAdminMode.value && farms.value.length === 0)
   const needsFarmSelect = computed(() => !loading.value && !isAdminMode.value && farms.value.length > 0 && !activeFarm.value)
 
-  // 최초 1회 자동 연속성: 한 번도 모드를 선택한 적 없고 (내가 접근 가능한) 농장이
-  // 단 하나뿐이면 선택화면 없이 그 농장 모드로 바로 진입한다(기존 단일 농장 사용자
-  // 무중단 전환). 로그인 여부가 아직 확정 안 됐으면(loading) 접근 가능 목록이
-  // 일시적으로 불안정하므로 둘 다 끝난 뒤에만 판단한다.
+  // 최초 1회 자동 연속성: 한 번도 모드를 선택한 적 없고 접근 가능한 농장이 단
+  // 하나뿐이면 선택화면 없이 그 농장 모드로 바로 진입한다. 로그인 여부가 아직
+  // 확정 안 됐으면(loading) 접근 가능 목록이 일시적으로 불안정하므로 끝난 뒤에만 판단한다.
   watch(
     () => [loading.value, farms.value.length],
     () => {
@@ -90,57 +91,85 @@ export const useFarmsStore = defineStore('farms', () => {
     { immediate: true },
   )
 
+  let unsubscribeOwned = null
+  function subscribeOwnedFarms(uid, isSuperAdmin) {
+    unsubscribeOwned?.()
+    ownedLoading.value = true
+    const q = isSuperAdmin ? collection(db, 'farms') : query(collection(db, 'farms'), where('ownerUid', '==', uid))
+    unsubscribeOwned = onSnapshot(q, (snap) => {
+      ownedFarmsRaw.value = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+      ownedLoading.value = false
+    }, reportAccessError)
+  }
+
+  async function refreshMemberFarmDocs(farmIds) {
+    memberDocsLoading.value = true
+    try {
+      const snaps = await Promise.all(farmIds.map((id) => getDoc(doc(db, 'farms', id))))
+      memberFarmDocs.value = snaps.filter((s) => s.exists()).map((s) => ({ id: s.id, ...s.data() }))
+    } catch (e) {
+      console.warn('[farmsStore] 소속 농장 문서 조회 실패', e)
+      memberFarmDocs.value = []
+    } finally {
+      memberDocsLoading.value = false
+    }
+  }
+
   async function init() {
     if (initialized.value) return
     initialized.value = true
     farmMembersStore.initGlobal()
 
     if (!firebaseEnabled || !db) {
-      allFarms.value = [{ id: LOCAL_FARM_ID, name: '로컬 농장', logo: '' }]
+      ownedFarmsRaw.value = [{ id: LOCAL_FARM_ID, name: '로컬 농장', logo: '' }]
       activeFarmIdLocal.value = LOCAL_FARM_ID
-      rawLoading.value = false
+      ownedLoading.value = false
+      memberDocsLoading.value = false
       return
     }
 
-    onSnapshot(
-      collection(db, 'farms'),
-      (snap) => {
-        allFarms.value = snap.docs
-          .map((d) => ({ id: d.id, ...d.data() }))
-          .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-        rawLoading.value = false
+    // 로그인 필수 앱이라, 로그인 상태가 확정된 뒤에야(그리고 로그인/로그아웃/계정
+    // 전환마다 다시) 농장 목록 구독을 연다 — 비로그인 상태에선 아예 아무것도
+    // 구독하지 않는다(App.vue가 로그인 화면을 띄우므로 필요도 없다).
+    watch(
+      () => [authStore.loading, authStore.user?.uid, authStore.isSuperAdmin],
+      ([authLoading, uid, isSuperAdmin]) => {
+        if (authLoading) return
+        if (!uid) {
+          unsubscribeOwned?.()
+          ownedFarmsRaw.value = []
+          ownedLoading.value = false
+          return
+        }
+        subscribeOwnedFarms(uid, isSuperAdmin)
       },
-      reportAccessError,
+      { immediate: true },
+    )
+
+    watch(
+      () => [farmMembersStore.myFarmIdsLoading, farmMembersStore.myFarmIds],
+      ([memberLoading, ids]) => {
+        if (memberLoading) { memberDocsLoading.value = true; return }
+        if (!ids.length) { memberFarmDocs.value = []; memberDocsLoading.value = false; return }
+        refreshMemberFarmDocs(ids)
+      },
+      { immediate: true, deep: true },
     )
   }
 
-  async function createFarm({ name, logo = '', pin = '' }) {
+  async function createFarm({ name, logo = '' }) {
     const trimmed = name.trim()
     if (!trimmed) return null
+    const uid = authStore.user?.uid
+    if (!uid) throw new Error('로그인이 필요합니다.')
     const id = uuid()
-    // 만든 사람이 로그인 상태일 때만 소유자가 정해진다. 비로그인(시스템 관리 PIN)
-    // 생성은 지금까지처럼 소유자 없는 농장으로 남는다 — 아직 아무것도 강제하지 않는다.
-    // 실제 소유자 UID는 farms/{id} 문서가 아니라 별도 서브문서(private/owner)에
-    // 적는다(전역 노출 방지, firestore.rules 참고) — 두 문서를 배치로 같이 써서
-    // 하나만 성공하는 반쪽 상태가 되지 않게 한다.
-    const ownerUid = authStore.user?.uid || null
-    const batch = writeBatch(db)
-    batch.set(doc(db, 'farms', id), {
+    await setDoc(doc(db, 'farms', id), {
       name: trimmed,
       logo,
-      pin: pin.trim(),
       order: farms.value.length,
       createdAt: new Date().toISOString(),
-      visibility: ownerUid ? 'private' : 'public',
+      ownerUid: uid,
     })
-    if (ownerUid) {
-      batch.set(doc(db, 'farms', id, 'private', 'owner'), { ownerUid })
-    }
-    await batch.commit()
-    if (ownerUid) {
-      await setDoc(doc(db, 'users', ownerUid), { ownedFarmIds: arrayUnion(id) }, { merge: true })
-      await farmMembersStore.refreshMyOwnedFarmIds()
-    }
     return id
   }
 
@@ -154,40 +183,14 @@ export const useFarmsStore = defineStore('farms', () => {
     await setDoc(doc(db, 'farms', id), { logo: logo || '' }, { merge: true })
   }
 
-  // PIN은 선택 항목이며 실제 인증이 아니라 실수로 다른 농장에 들어가는 것을 막는
-  // 가벼운 안전장치다(이 앱은 별도 로그인 없이 모두가 같은 Firestore를 공유한다).
-  async function updateFarmPin(id, pin) {
-    await setDoc(doc(db, 'farms', id), { pin: pin.trim() }, { merge: true })
-  }
-
-  // 소유권 이전(슈퍼관리자용). 빈 값이면 공개 농장으로 되돌린다. 규칙상 슈퍼관리자만
-  // 이 값을 임의로 바꿀 수 있고(일반 사용자는 "1회 소유권 주장"만 가능), 이 함수를
-  // 노출하는 FarmManagementPanel.vue도 슈퍼관리자만 들어올 수 있는 화면이다.
-  // 여러 문서를 순차로 쓴다(원자적 배치가 아님) — 슈퍼관리자만 쓰는 저빈도 관리
-  // 동작이라, 중간에 실패해도 재시도로 스스로 바로잡을 수 있는 수준의 위험만 남는다.
+  // 소유권 이전(슈퍼관리자용). 공개 농장이 없으므로 항상 특정 계정으로만 옮길 수
+  // 있다(비워서 공개로 되돌리는 개념 자체가 없음). 규칙상 슈퍼관리자만 ownerUid를
+  // 바꿀 수 있고, 이 함수를 노출하는 FarmManagementPanel.vue도 슈퍼관리자만
+  // 들어올 수 있는 화면이다.
   async function updateFarmOwner(id, ownerUid) {
     const trimmed = (ownerUid || '').trim()
-    const ownerRef = doc(db, 'farms', id, 'private', 'owner')
-    const prevOwnerSnap = await getDoc(ownerRef).catch(() => null)
-    const prevOwnerUid = prevOwnerSnap?.exists() ? (prevOwnerSnap.data()?.ownerUid ?? null) : null
-
-    // ⚠ 순서가 중요하다: 비공개→공개 전환 시 private/owner 서브문서를 먼저 지우면,
-    // 그 다음에 오는 visibility 수정 요청이 "지금 소유자인지"를 더 이상 증명할 수
-    // 없어(서브문서가 이미 없으므로) 거부된다(실측으로 확인) — 슈퍼관리자는
-    // isSuperAdmin() 예외로 어차피 통과하지만, 순서를 지켜 두는 게 더 견고하다.
-    // 그래서 visibility를 먼저 바꾸고, 서브문서는 그 다음에 정리한다.
-    if (trimmed) {
-      await setDoc(doc(db, 'farms', id), { visibility: 'private' }, { merge: true })
-      await setDoc(ownerRef, { ownerUid: trimmed })
-      await setDoc(doc(db, 'users', trimmed), { ownedFarmIds: arrayUnion(id) }, { merge: true }).catch(() => {})
-    } else {
-      await setDoc(doc(db, 'farms', id), { visibility: 'public' }, { merge: true })
-      await deleteDoc(ownerRef).catch(() => {})
-    }
-    if (prevOwnerUid && prevOwnerUid !== trimmed) {
-      await setDoc(doc(db, 'users', prevOwnerUid), { ownedFarmIds: arrayRemove(id) }, { merge: true }).catch(() => {})
-    }
-    await farmMembersStore.refreshMyOwnedFarmIds()
+    if (!trimmed) throw new Error('소유자 계정을 입력해 주세요.')
+    await setDoc(doc(db, 'farms', id), { ownerUid: trimmed }, { merge: true })
   }
 
   // 목록에서만 뺀다(휴지통 보관) — 실제 데이터(farms/{id}/data/*, treatments/*)는 그대로 남아
@@ -215,13 +218,6 @@ export const useFarmsStore = defineStore('farms', () => {
     // 확실하지 않은 걸 지우면 다른 농장이 참조 중인 사진을 지울 위험이 있다.
     const photosSnap = await getDocs(query(collection(db, 'photos'), where('farmId', '==', id)))
     await Promise.all(photosSnap.docs.map((d) => deleteDoc(d.ref)))
-    // 소유권 서브문서와, 소유자 쪽 users/{uid}.ownedFarmIds에 남은 참조도 같이 정리한다.
-    const ownerSnap = await getDoc(doc(db, 'farms', id, 'private', 'owner')).catch(() => null)
-    const ownerUid = ownerSnap?.exists() ? (ownerSnap.data()?.ownerUid ?? null) : null
-    await deleteDoc(doc(db, 'farms', id, 'private', 'owner')).catch(() => {})
-    if (ownerUid) {
-      await setDoc(doc(db, 'users', ownerUid), { ownedFarmIds: arrayRemove(id) }, { merge: true }).catch(() => {})
-    }
     await deleteDoc(doc(db, 'farms', id))
   }
 
@@ -249,7 +245,7 @@ export const useFarmsStore = defineStore('farms', () => {
   return {
     farms, deletedFarms, loading, accessError, reportAccessError,
     activeFarm, isAdminMode, needsFarmCreate, needsFarmSelect,
-    init, createFarm, renameFarm, updateFarmLogo, updateFarmPin, updateFarmOwner, deleteFarm, restoreFarm, permanentlyDeleteFarm,
+    init, createFarm, renameFarm, updateFarmLogo, updateFarmOwner, deleteFarm, restoreFarm, permanentlyDeleteFarm,
     selectFarm, enterAdminMode, exitToSelector,
   }
 })

@@ -12,6 +12,7 @@ import { useAuthStore } from '../stores/authStore.js'
 function accessibleFarmDoc(farmDoc) {
   const authStore = useAuthStore()
   return canAccessFarm({ id: farmDoc.id, ...farmDoc.data() }, {
+    uid: authStore.user?.uid,
     isSuperAdmin: authStore.isSuperAdmin,
   })
 }

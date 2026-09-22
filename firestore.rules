@@ -3,12 +3,10 @@ service cloud.firestore {
   match /databases/{database}/documents {
     // ── 농장별 사용량 상한 (한 농장주가 다른 농장주 몫의 Firestore 무료 한도를
     //    잠식하지 못하도록) ──────────────────────────────────────────────────
-    // 인증이 없는 지금 구조에선 "누가 썼는지"를 규칙에서 구분할 수 없어, 배열이
-    // 무한히 늘어나는 것만 막는 소극적 방어다. farms/{farmId}/data/{key} 는
-    // 도메인(재배동·작업·재고 등)마다 레코드별 문서가 아니라 "문서 1개 + 그 안의
-    // 배열"이다(farmDataSchema.js DOMAIN_SYNC 참고) — 그래서 "문서 수 제한"이
-    // 아니라 "그 배열의 길이 제한"으로 건다. 배열 필드명은 도메인 키와 동일하다
-    // (tasks 문서의 tasks 배열처럼).
+    // farms/{farmId}/data/{key} 는 도메인(재배동·작업·재고 등)마다 레코드별
+    // 문서가 아니라 "문서 1개 + 그 안의 배열"이다(farmDataSchema.js DOMAIN_SYNC
+    // 참고) — 그래서 "문서 수 제한"이 아니라 "그 배열의 길이 제한"으로 건다.
+    // 배열 필드명은 도메인 키와 동일하다(tasks 문서의 tasks 배열처럼).
     //
     // ⚠ 문서 바이트 크기(예: 200KB) 상한은 시도해봤으나 뺐다 — 실측(dev 프로젝트에
     // 실제로 써봄) 결과 request.resource.size() 는 최상위에 바로 오는 문자열
@@ -23,24 +21,19 @@ service cloud.firestore {
     }
 
     // ── 농장 소유권 강제 ─────────────────────────────────────────────────────
+    // 공개 농장 개념은 없다 — 농장은 항상 정확히 1명의 소유자(ownerUid)를 갖고,
+    // 로그인해야만 앱을 쓸 수 있다. 그래서 ownerUid를 farms/{farmId} 문서에 그대로
+    // 두고 read를 소유자·구성원·슈퍼관리자로만 제한해도(예전처럼 서브문서로 숨길
+    // 필요 없이) 노출 문제가 없다 — 필요 없는 사람에게는 애초에 문서 자체가 안 보인다.
+    //
     // 전부 data.get('key', 기본값) 형태만 쓴다 — 필드가 없을 때 대괄호 접근(d.key,
     // data[key])은 에러를 내고, 그 에러는 ||로 감싸도 상황에 따라 그대로 거부로
-    // 이어질 수 있다(레거시 마이그레이션이 만드는 문서, 오래된 백업 파일처럼
-    // visibility 필드가 아예 없는 문서에서 실제로 걸림).
-    //
-    // ⚠ ownerUid(실제 Firebase UID)는 farms/{farmId} 문서엔 두지 않는다 — 그
-    // 컬렉션은 농장 선택 화면 때문에 read가 완전히 열려 있어서(아래 farms/{farmId}
-    // 주석 참고) 거기 있는 필드는 로그인조차 안 한 누구나 그대로 읽어 간다.
-    // 실제 UID는 farms/{farmId}/private/owner 서브문서로 분리해 소유자 본인·
-    // 슈퍼관리자만 읽을 수 있게 막는다. farms/{farmId} 자체엔 "지금 공개인지"만
-    // 나타내는 visibility만 남는다.
-    function isPublicFarm(d) { return d.get('visibility', 'private') == 'public'; }
-    function ownerUidOf(farmId) {
-      return exists(/databases/$(database)/documents/farms/$(farmId)/private/owner)
-        ? get(/databases/$(database)/documents/farms/$(farmId)/private/owner).data.get('ownerUid', null)
-        : null;
+    // 이어질 수 있다.
+    function isOwner(farmId) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/farms/$(farmId))
+        && get(/databases/$(database)/documents/farms/$(farmId)).data.get('ownerUid', null) == request.auth.uid;
     }
-    function isOwner(farmId) { return request.auth != null && ownerUidOf(farmId) == request.auth.uid; }
     function isSuperAdmin() {
       return request.auth != null
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
@@ -50,12 +43,8 @@ service cloud.firestore {
     // — 안 그러면 그 상태에서 아무도(관리자도) 남은 데이터를 정리할 수 없게 된다.
     function canAccessFarm(farmId) {
       return !exists(/databases/$(database)/documents/farms/$(farmId))
-        || isPublicFarm(get(/databases/$(database)/documents/farms/$(farmId)).data)
         || isOwner(farmId)
         || isSuperAdmin();
-    }
-    function isOwnerOfFarm(farmId) {
-      return exists(/databases/$(database)/documents/farms/$(farmId)) && isOwner(farmId);
     }
 
     // ── 농장종사자 기능별 권한 ───────────────────────────────────────────────
@@ -83,13 +72,13 @@ service cloud.firestore {
     // "데이터는 저장됐는데 이력만 안 남는" 어중간한 상태가 생긴다.
     //
     // ⚠ 순서가 읽기 비용에 영향을 준다: memberPermission 계열을 먼저 본다.
-    // canAccessFarm을 먼저 두면(예전 순서) — 소유자·슈퍼관리자·공개농장이 전부
-    // 아닌(가장 흔한, 제한된 권한의 농장종사자) 경우에도 매번 farms 문서 읽기 +
-    // users 문서 읽기(isSuperAdmin 판단용)를 먼저 낭비하고 나서야 진짜 답을 주는
-    // 멤버 문서 읽기로 넘어간다. 반대로 memberPermission을 먼저 두면 이 흔한
-    // 경우는 멤버 문서 읽기 1번으로 끝난다(||는 앞이 true면 뒤를 평가 안 함).
-    // 소유자·슈퍼관리자·공개농장 쪽은 대신 멤버 문서 존재확인(1회, 없으면 false)이
-    // 추가로 붙지만, 농장당 소유자는 1명뿐이라 전체적으로 더 싸다.
+    // canAccessFarm을 먼저 두면 — 소유자·슈퍼관리자가 아닌(가장 흔한, 제한된 권한의
+    // 농장종사자) 경우에도 매번 농장 문서 읽기 + users 문서 읽기(isSuperAdmin 판단용)를
+    // 먼저 낭비하고 나서야 진짜 답을 주는 멤버 문서 읽기로 넘어간다. 반대로
+    // memberPermission을 먼저 두면 이 흔한 경우는 멤버 문서 읽기 1번으로 끝난다
+    // (||는 앞이 true면 뒤를 평가 안 함). 소유자·슈퍼관리자 쪽은 대신 멤버 문서
+    // 존재확인(1회, 없으면 false)이 추가로 붙지만, 농장당 소유자는 1명뿐이라
+    // 전체적으로 더 싸다.
     function canReadFarmDomain(farmId, docId) {
       return memberPermission(farmId, domainKeyFor(docId), 'read')
         || memberPermission(farmId, domainKeyFor(docId), 'write')
@@ -103,84 +92,68 @@ service cloud.firestore {
     }
 
     match /shared/appSettings {
-      // 분류·항목 설정(작업 분류, 재배 품종, 농약 종류 등) — 모든 농장이 공유하는 공통 설정.
-      allow read, write: if true;
+      // 분류·항목 설정(작업 분류, 재배 품종, 농약 종류 등) — 모든 농장이 공유하는
+      // 공통 설정. 앱 전체가 로그인 필수라 로그인만 확인한다.
+      allow read, write: if request.auth != null;
     }
     match /farms/{farmId} {
-      // 농장 등록 정보(이름·로고·PIN·공개여부). read는 그대로 열어둔다 — farmsStore.js가
-      // 필터 없이 farms 컬렉션 전체를 구독하므로, 여기서 read를 막으면 그 구독 자체가
-      // 거부되어 앱이 뜨질 못한다(목록은 클라이언트에서 소유권 기준으로 숨긴다,
-      // farmAccess.js). ⚠ 즉 이름·로고·PIN(평문)은 여전히 누구나 읽을 수 있다 — 다만
-      // 실제 소유자 UID는 이 문서에 없다(위 "농장 소유권 강제" 섹션 설명 참고,
-      // farms/{farmId}/private/owner로 분리했다).
-      allow read: if true;
-      // 공개(visibility: public)로 만드는 건 누구나. 비공개로 만드는 건 로그인만
-      // 있으면 된다 — 실제로 "내가 소유자로 지정되는지"는 이 문서가 아니라
-      // private/owner 서브문서의 create 규칙이 따로 검증한다(같은 배치로 같이
-      // 쓴다, farmsStore.js createFarm 참고). 그 서브문서 없이 visibility만
-      // private로 만들면 아무도(슈퍼관리자 제외) 못 건드리는 상태가 되지만,
-      // 그건 잘못된 접근을 허용하는 게 아니라 스스로 잠그는 실수라 안전하다.
-      allow create: if request.resource.data.get('visibility', 'private') == 'public'
-        || request.auth != null;
-      // 공개 유지 상태에서의 수정(이름·로고·PIN 등, 로그인 불필요 — 지금의 PIN
-      // 기반 시스템 관리 흐름) / 공개→비공개 전환(소유권 주장, 로그인만 있으면
-      // 됨 — 실제 소유자 지정은 private/owner 서브문서 create 규칙이 검증) /
-      // 비공개 상태에서의 수정(소유자만, 비공개 유지든 공개로 되돌리든 포함).
-      // 슈퍼관리자는 상태 무관하게 항상 수정 가능(소유권 이전 등).
+      // 농장 등록 정보(이름·로고·소유자). 공개 농장이 없으므로 로그인한 사람 중
+      // 소유자·구성원·슈퍼관리자만 개별 문서를 읽을 수 있다.
+      allow get: if isSuperAdmin() || isOwner(farmId) || isMemberOfFarm(farmId);
+      // list(예: where('ownerUid','==',내 uid))는 "쿼리 결과 전체에 대해 규칙이
+      // 항상 성립함을 증명"할 수 있어야 허용된다. 슈퍼관리자는 쿼리 조건과 무관하게
+      // 항상 증명 가능(전체 목록 화면용). 그 외엔 쿼리 자체가 ownerUid == 내 uid로
+      // 걸려 있을 때만 허용 — 그 필터가 이미 조건을 보장하므로 증명 가능하다.
+      // 구성원으로만 속한 농장은 이 list로 찾지 않는다(개별 get으로 찾음,
+      // farmsStore.js/farmMembersStore.js 참고) — 그래서 isMemberOfFarm은 여기 없다.
+      allow list: if isSuperAdmin() || resource.data.ownerUid == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;
+      // 소유자는 자기 농장 정보(이름·로고 등)를 수정할 수 있지만 소유권(ownerUid)
+      // 자체는 못 바꾼다 — 소유권 이전은 슈퍼관리자 전용(FarmManagementPanel.vue).
       allow update: if isSuperAdmin()
-        || (resource.data.get('visibility', 'private') == 'public'
-          && request.resource.data.get('visibility', 'private') == 'public')
-        || (resource.data.get('visibility', 'private') == 'public'
-          && request.resource.data.get('visibility', 'private') == 'private'
-          && request.auth != null)
-        || (resource.data.get('visibility', 'private') == 'private' && isOwnerOfFarm(farmId));
-      allow delete: if isPublicFarm(resource.data) || isOwnerOfFarm(farmId) || isSuperAdmin();
-    }
-    match /farms/{farmId}/private/owner {
-      // 실제 소유자 UID의 단일 진실 공급원(위 "농장 소유권 강제" 섹션 참고).
-      // 소유자 본인과 슈퍼관리자만 읽을 수 있다 — 자기 문서인지는 저장된 값과
-      // 비교해서만 판단하므로(본인이면 통과, 아니면 거부), 미리 알고 있지 않아도
-      // "내가 소유자인지" 확인 자체가 가능하다(users/{uid} 자기 문서 read와 같은 패턴).
-      allow read: if isSuperAdmin()
-        || (request.auth != null && resource.data.get('ownerUid', null) == request.auth.uid);
-      // 최초 지정(생성)은 본인을 소유자로 적어 넣는 것만 허용한다 — 남을 소유자로
-      // 지정하는 건 슈퍼관리자만(제3자에게 공개 농장을 배정하는 경우).
-      allow create: if request.auth != null
-        && request.resource.data.keys().hasOnly(['ownerUid'])
-        && (request.resource.data.ownerUid == request.auth.uid || isSuperAdmin());
-      // 이미 지정된 소유권을 다른 사람으로 바꾸는(이전) 건 슈퍼관리자만.
-      allow update: if isSuperAdmin() && request.resource.data.keys().hasOnly(['ownerUid']);
-      // 공개로 되돌리는(소유권 포기) 건 본인 또는 슈퍼관리자.
-      allow delete: if isSuperAdmin()
-        || (request.auth != null && resource.data.get('ownerUid', null) == request.auth.uid);
+        || (isOwner(farmId) && request.resource.data.ownerUid == resource.data.ownerUid);
+      allow delete: if isSuperAdmin() || isOwner(farmId);
     }
     match /farms/{farmId}/data/{docId} {
       // 농장별 데이터: facilities/ancillaries/seedlings/tasks/issues/inventory/usageGuides/
       // changeLog(도메인별), availablePesticide/recommendSettings/treatments(전용 스토어가
-      // 독립적으로 관리 — farmStore.js의 DOMAIN_SYNC엔 없다). 소유자·슈퍼관리자·공개농장은
-      // 항상 전체 접근, 그 외엔 도메인별(domainKeyFor 매핑
-      // 참고) 구성원 권한을 본다. delete 요청엔 request.resource 가 없어(null) 배열
-      // 길이 조건을 걸면 삭제 자체가 막힌다 — 그렇다고 read 조건(canReadFarmDomain)을
-      // 쓰면 안 된다. ⚠ 실제로 이 실수를 했었다: 읽기 전용(write:false) 구성원이
-      // deleteDoc()을 직접 호출해 그 도메인 문서 전체(그 농장의 모든 재배동/작업 등
-      // 배열)를 지울 수 있는 상태였다 — canWriteFarmDomain으로 고쳤다.
+      // 독립적으로 관리 — farmStore.js의 DOMAIN_SYNC엔 없다). 소유자·슈퍼관리자는
+      // 항상 전체 접근, 그 외엔 도메인별(domainKeyFor 매핑 참고) 구성원 권한을 본다.
+      // delete 요청엔 request.resource 가 없어(null) 배열 길이 조건을 걸면 삭제
+      // 자체가 막힌다 — 그렇다고 read 조건(canReadFarmDomain)을 쓰면 안 된다.
+      // ⚠ 실제로 이 실수를 했었다: 읽기 전용(write:false) 구성원이 deleteDoc()을
+      // 직접 호출해 그 도메인 문서 전체(그 농장의 모든 재배동/작업 등 배열)를
+      // 지울 수 있는 상태였다 — canWriteFarmDomain으로 고쳤다.
       allow read: if canReadFarmDomain(farmId, docId);
       allow delete: if canWriteFarmDomain(farmId, docId);
       allow create, update: if canWriteFarmDomain(farmId, docId) && withinDomainArrayCap(docId, request.resource.data);
     }
     match /farms/{farmId}/members/{memberUid} {
-      // 농장종사자 권한 문서. 본인·소유자·슈퍼관리자만 읽을 수 있다(다른 구성원의
-      // 권한 구성을 서로 못 봄). 생성은 본인 uid로만, 그리고 초대 코드(inviteCodes)가
-      // 실제로 존재하고 그 코드의 farmId/permissions와 정확히 일치할 때만 — 권한을
-      // 스스로 부풀려 적어 넣는 걸 막는다(코드에 적힌 것만 그대로 받아 적을 수 있음).
-      // 이후 권한 수정·제거는 소유자·슈퍼관리자만.
-      allow read: if request.auth != null
-        && (request.auth.uid == memberUid || isOwnerOfFarm(farmId) || isSuperAdmin());
+      // 농장종사자 권한 문서. 본인·소유자·슈퍼관리자만 단건으로 읽을 수 있다(다른
+      // 구성원의 권한 구성을 서로 못 봄). 생성은 본인 uid로만, 그리고 초대 코드
+      // (inviteCodes)가 실제로 존재하고 그 코드의 farmId/permissions와 정확히
+      // 일치할 때만 — 권한을 스스로 부풀려 적어 넣는 걸 막는다(코드에 적힌 것만
+      // 그대로 받아 적을 수 있음). 이후 권한 수정·제거는 소유자·슈퍼관리자만.
+      allow get: if request.auth != null
+        && (request.auth.uid == memberUid || isOwner(farmId) || isSuperAdmin());
+      // list는 농장 하나의 구성원 전체 목록(소유자·슈퍼관리자 전용 "구성원" 화면 —
+      // farms/{farmId}/members 컬렉션을 그 farmId로 구독)에만 쓴다 — farmId가
+      // 경로에서 고정되므로 isOwner(farmId)가 결과 전체에 대해 증명 가능하다.
+      // ⚠ "내가 어느 농장들의 구성원인지" 찾는 컬렉션그룹 쿼리(collectionGroup
+      // ('members').where('uid','==',내 uid))는 시도해봤으나 실측으로 거부됨을
+      // 확인했다 — isOwner(farmId) 항이 문서마다 다른 farmId에 의존해서(경로가
+      // 매 문서마다 다름), Firestore가 "결과 전체에 대해 증명 가능"을 판단할 때
+      // 이 항 때문에 전체를 증명 불가로 본다(uid 필드로 걸린 다른 항이 있어도
+      // 소용없음 — OR의 한쪽 항이 못 증명되면 전체가 거부됨). 그래서 구성원
+      // 자격 조회는 users/{uid}.memberFarmIds(후보) + 개별 get() 검증 방식을
+      // 그대로 쓴다(farmMembersStore.js의 refreshMyFarmIds).
+      allow list: if isSuperAdmin() || isOwner(farmId);
       allow create: if request.auth != null && request.auth.uid == memberUid
-        // 필드를 이 5개로 제한하고 email은 로그인 토큰의 실제 이메일과 같아야 한다
-        // — 안 그러면 가입자가 자기 문서에 아무 필드나 얹거나, 남의 이메일을 자기
-        // 것처럼 적어 넣어(신뢰할 수 있는 정보처럼 보이게) 농장주를 속일 수 있다.
-        && request.resource.data.keys().hasOnly(['permissions', 'email', 'displayName', 'joinedAt', 'joinedViaCode'])
+        && request.resource.data.keys().hasOnly(['uid', 'permissions', 'email', 'displayName', 'joinedAt', 'joinedViaCode'])
+        && request.resource.data.uid == request.auth.uid
+        // email은 로그인 토큰의 실제 이메일과 같아야 한다 — 안 그러면 가입자가
+        // 남의 이메일을 자기 것처럼 적어 넣어(신뢰할 수 있는 정보처럼 보이게)
+        // 농장주를 속일 수 있다.
         && request.resource.data.get('email', '') == request.auth.token.get('email', '')
         // joinedViaCode가 빈 문자열이 아님을 먼저 확인한 뒤에야 그 값으로 경로를
         // 만든다 — 빈 문자열로 exists()/get() 경로를 바로 만들면 어떻게 처리되는지
@@ -196,31 +169,27 @@ service cloud.firestore {
           || get(/databases/$(database)/documents/inviteCodes/$(request.resource.data.joinedViaCode)).data.claimedBy == request.auth.uid)
         && request.resource.data.permissions
            == get(/databases/$(database)/documents/inviteCodes/$(request.resource.data.joinedViaCode)).data.permissions;
-      allow update, delete: if isOwnerOfFarm(farmId) || isSuperAdmin();
+      allow update, delete: if isOwner(farmId) || isSuperAdmin();
     }
     match /farms/{farmId}/inviteCodeRefs/{code} {
       // inviteCodes/{code}(최상위)의 존재를 농장별로 목록화하기 위한 참조 문서.
       // 최상위 inviteCodes는 list를 금지해서(열거 방지) 소유자가 자기 농장에 발급한
       // 코드 목록을 조회할 수단이 없다 — 이 서브컬렉션은 path만으로 접근을 판단해서
       // (resource.data를 안 보므로) list 쿼리에도 안전하게 쓸 수 있다.
-      allow read, write: if isOwnerOfFarm(farmId) || isSuperAdmin();
+      allow read, write: if isOwner(farmId) || isSuperAdmin();
     }
     // 사진 문서에 도메인(재배동/작업 등) 구분은 없다 — changeLog와 같은 수준으로
     // "그 농장 구성원이면 다 보인다"로 단순화한다. canAccessFarm과 달리 "농장 문서가
     // 없으면 허용"은 여기서 쓰지 않는다 — canAccessFarm의 그 예외는 농장 하위 데이터
     // 정리(cleanup) 용도인데, 사진은 존재하지 않는 임의 farmId를 사칭 생성하면 그
     // 예외 때문에 그대로 통과해 버린다(실측으로 확인). 그 farmId가 실제 존재하는
-    // 농장일 때만 공개·소유자·슈퍼관리자·구성원 여부를 따진다.
+    // 농장일 때만 소유자·슈퍼관리자·구성원 여부를 따진다.
     function canAccessPhotoFarm(farmId) {
       return exists(/databases/$(database)/documents/farms/$(farmId))
-        && (isPublicFarm(get(/databases/$(database)/documents/farms/$(farmId)).data)
-          || isOwner(farmId)
-          || isSuperAdmin()
-          || isMemberOfFarm(farmId));
+        && (isOwner(farmId) || isSuperAdmin() || isMemberOfFarm(farmId));
     }
     match /photos/{photoId} {
-      // 사진(base64)을 사진별 개별 문서로 분산 저장한다(원래 농장 무관 전역
-      // 저장소였다가 이제 farmId로 농장별 접근을 건다). farmId가 없는(마이그레이션
+      // 사진(base64)을 사진별 개별 문서로 분산 저장한다. farmId가 없는(마이그레이션
       // 안 됐거나 어느 농장 것인지 확실하지 않은) 사진은 지금처럼 열어둔다.
       allow read, delete: if resource.data.get('farmId', null) == null
         || canAccessPhotoFarm(resource.data.farmId);
@@ -240,7 +209,8 @@ service cloud.firestore {
       // 캐시 외에 기기 간 공유가 필요한 공통 데이터도 이 경로를 쓴다:
       //   pesticide:manual — 공공데이터에 없어 직접 등록한 농약 목록
       //   app:policy       — 전 기기 공통 정책(농약 직접등록 권한 등)
-      allow read, write: if true;
+      // 앱 전체가 로그인 필수라 로그인만 확인한다.
+      allow read, write: if request.auth != null;
     }
     match /inviteCodes/{code} {
       // 농장종사자 초대 코드 — 최상위 컬렉션. 농장 PIN과 같은 수준의 "짧은 공유
@@ -252,7 +222,7 @@ service cloud.firestore {
       allow create: if request.auth != null
         && request.resource.data.keys().hasOnly(['farmId', 'permissions', 'createdAt', 'createdBy'])
         && request.resource.data.get('farmId', '') != ''
-        && (isOwnerOfFarm(request.resource.data.farmId) || isSuperAdmin());
+        && (isOwner(request.resource.data.farmId) || isSuperAdmin());
       // 삭제(사용 후 정리·폐기)는 로그인한 사람 누구나.
       allow delete: if request.auth != null;
       // claimedBy는 "아직 아무도 안 씀(null) → 나로 1회 표시"만 허용한다 — 이미
@@ -276,11 +246,10 @@ service cloud.firestore {
       allow list: if isSuperAdmin();
       allow create: if request.auth != null && request.auth.uid == uid
         && !('role' in request.resource.data);
-      // role이 그대로 유지되는 수정(예: ownedFarmIds/memberFarmIds 갱신)은 본인 또는
-      // 슈퍼관리자(농장 소유권 이전 시 남의 ownedFarmIds를 대신 써 줘야 함). role 자체를
-      // 바꾸는 수정은 슈퍼관리자가 "남의" 문서에 한해서만 가능(본인 role은 이 경로로도
-      // 못 바꾼다 — 자기 자신에게 권한을 부여/유지하는 걸 막기 위함) — 전역 사용자
-      // 관리 화면의 권한 부여/회수가 이 분기를 쓴다.
+      // role이 그대로 유지되는 수정(프로필 정보 등)은 본인 또는 슈퍼관리자. role
+      // 자체를 바꾸는 수정은 슈퍼관리자가 "남의" 문서에 한해서만 가능(본인 role은
+      // 이 경로로도 못 바꾼다 — 자기 자신에게 권한을 부여/유지하는 걸 막기 위함) —
+      // 전역 사용자 관리 화면의 권한 부여/회수가 이 분기를 쓴다.
       allow update: if request.resource.data.get('role', null) == resource.data.get('role', null)
         ? (request.auth != null && request.auth.uid == uid || isSuperAdmin())
         : (isSuperAdmin() && request.auth.uid != uid
