@@ -2,11 +2,14 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
   createUserWithEmailAndPassword,
+  EmailAuthProvider,
   onAuthStateChanged,
+  reauthenticateWithCredential,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut,
   updateCurrentUser,
+  updatePassword,
   updateProfile,
 } from 'firebase/auth'
 import { doc, getDoc, setDoc } from 'firebase/firestore'
@@ -140,5 +143,25 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  return { user, role, loading, error, isLoggedIn, isSuperAdmin, init, signUp, signIn, signOutUser, resetPassword }
+  // 비밀번호 변경(로그인된 상태). updatePassword()는 "최근에 로그인했음"을 요구해서
+  // (auth/requires-recent-login), 현재 비밀번호로 먼저 재인증한 뒤 바꾼다 — 그래서
+  // 세션이 오래됐어도 갑자기 에러가 나지 않고, 자연스럽게 "현재 비밀번호" 입력을 받는
+  // 흐름이 된다.
+  async function changePassword(currentPassword, newPassword) {
+    error.value = ''
+    try {
+      const cred = EmailAuthProvider.credential(auth.currentUser.email, currentPassword)
+      await reauthenticateWithCredential(auth.currentUser, cred)
+      await updatePassword(auth.currentUser, newPassword)
+      return true
+    } catch (e) {
+      error.value = messageFor(e)
+      return false
+    }
+  }
+
+  return {
+    user, role, loading, error, isLoggedIn, isSuperAdmin,
+    init, signUp, signIn, signOutUser, resetPassword, changePassword,
+  }
 })
