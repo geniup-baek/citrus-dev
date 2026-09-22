@@ -1,14 +1,24 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { doc, getDoc } from 'firebase/firestore'
 import { db } from '../services/firebase'
 import { useFarmsStore } from '../stores/farmsStore'
 import { useAuthStore } from '../stores/authStore'
+import { useUserAdminStore } from '../stores/userAdminStore'
 import { compressImageFile } from '../utils/imageProcessing'
 import { confirm } from '../composables/useConfirm'
 
 const farmsStore = useFarmsStore()
 const authStore = useAuthStore()
+const userAdminStore = useUserAdminStore()
+
+// 소유자 계정 ID 입력을 도와주는 자동완성 목록 — 한 번이라도 로그인한 계정만
+// 뜬다(사용자 관리 탭과 같은 데이터). 전에는 Firebase 콘솔에서 UID를 직접 찾아
+// 복사해 넣어야 해서 불편했다.
+onMounted(() => { userAdminStore.refreshUsers() })
+function userLabel(user) {
+  return [user.displayName, user.email].filter(Boolean).join(' · ') || user.uid
+}
 
 // farms/{id} 문서엔 이제 ownerUid가 없다(전역 노출 방지, firestore.rules 참고) —
 // 이 화면은 슈퍼관리자 전용이라 private/owner 서브문서를 직접 읽어도 된다(규칙상
@@ -34,6 +44,7 @@ const editingFarmId = ref(null)
 const farmEditName = ref('')
 const farmEditPin = ref('')
 const farmEditOwnerUid = ref('')
+const matchedOwner = computed(() => userAdminStore.users.find((u) => u.uid === farmEditOwnerUid.value.trim()))
 
 function startEditFarm(farm) {
   editingFarmId.value = farm.id
@@ -139,8 +150,24 @@ async function submitNewFarm() {
         <template v-if="editingFarmId === farm.id">
           <input v-model="farmEditName" class="settings-edit-input" type="text" placeholder="농장 이름" @keydown.enter.prevent="saveFarmName(farm.id, farmOwnerUids[farm.id])" @keydown.escape.prevent="cancelEditFarm" />
           <input v-model="farmEditPin" class="settings-edit-input" type="text" inputmode="numeric" placeholder="PIN (선택, 비우면 해제)" style="max-width: 11rem;" @keydown.enter.prevent="saveFarmName(farm.id, farmOwnerUids[farm.id])" @keydown.escape.prevent="cancelEditFarm" />
-          <input v-model="farmEditOwnerUid" class="settings-edit-input" type="text" placeholder="소유자 계정 ID (비우면 공개 농장)" style="max-width: 16rem;" @keydown.enter.prevent="saveFarmName(farm.id, farmOwnerUids[farm.id])" @keydown.escape.prevent="cancelEditFarm" />
-          <p class="muted text-sm" style="flex-basis: 100%; margin: 0;">계정 ID는 Firebase 콘솔 → Authentication에서 이메일로 찾을 수 있습니다(이메일이 아니라 ID를 입력해야 합니다).</p>
+          <input
+            v-model="farmEditOwnerUid"
+            class="settings-edit-input"
+            type="text"
+            list="known-owner-accounts"
+            placeholder="소유자 계정 (비우면 공개 농장)"
+            style="max-width: 16rem;"
+            @keydown.enter.prevent="saveFarmName(farm.id, farmOwnerUids[farm.id])"
+            @keydown.escape.prevent="cancelEditFarm"
+          />
+          <datalist id="known-owner-accounts">
+            <option v-for="u in userAdminStore.users" :key="u.uid" :value="u.uid">{{ userLabel(u) }}</option>
+          </datalist>
+          <p class="muted text-sm" style="flex-basis: 100%; margin: 0;">
+            <template v-if="farmEditOwnerUid.trim() && matchedOwner">선택된 계정: {{ userLabel(matchedOwner) }}</template>
+            <template v-else-if="farmEditOwnerUid.trim()">이 앱에 로그인한 적 없는 계정 ID입니다 — 직접 입력한 값 그대로 저장됩니다.</template>
+            <template v-else>입력창을 클릭하면 로그인한 적 있는 계정이 자동완성으로 뜹니다. 목록에 없으면 Firebase 콘솔 → Authentication에서 이메일로 ID를 찾아 직접 입력하세요.</template>
+          </p>
           <label class="ghost compact-btn">
             로고 변경
             <input accept="image/*" type="file" hidden @change="(e) => handleFarmLogoChange(farm.id, e)" />
