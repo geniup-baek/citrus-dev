@@ -25,8 +25,11 @@ const initialTab = TAB_KEYS.includes(route.query.tab) ? route.query.tab : 'facil
 const activeTab = ref(farmMembersStore.canRead(TAB_DOMAINS[initialTab]) ? initialTab : (readableTabs()[0] || initialTab))
 
 // 재배동 목록에서 '묘목 보기'를 선택하면 묘목 탭으로 이동해 해당 재배동으로 필터링한다.
+// 묘목 읽기 권한이 없으면 그 버튼 자체가 안 뜨지만(FacilitiesPanel.vue), 여기서도
+// 한 번 더 막아 둔다 — 탭 버튼(위 tab-bar)의 canRead 게이팅과 항상 같은 결론이어야 한다.
 const pendingGreenhouseId = ref('')
 function viewSeedlingsFor(greenhouseId) {
+  if (!farmMembersStore.canRead('seedlings')) return
   pendingGreenhouseId.value = greenhouseId
   activeTab.value = 'seedlings'
 }

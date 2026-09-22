@@ -220,7 +220,7 @@ async function saveFacility() {
             </div>
           </div>
           <div class="row-actions">
-            <button class="ghost" type="button" @click="emit('view-seedlings', facility.id)">{{ localeStore.t('facilities.viewSeedlings') }}</button>
+            <button v-if="farmMembersStore.canRead('seedlings')" class="ghost" type="button" @click="emit('view-seedlings', facility.id)">{{ localeStore.t('facilities.viewSeedlings') }}</button>
             <template v-if="showForm">
               <button class="ghost" :disabled="i === 0" @click="moveFacility(i, -1)">{{ localeStore.t('common.moveUp') }}</button>
               <button class="ghost" :disabled="i === store.state.facilities.length - 1" @click="moveFacility(i, 1)">{{ localeStore.t('common.moveDown') }}</button>
