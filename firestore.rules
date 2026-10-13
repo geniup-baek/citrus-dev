@@ -311,7 +311,12 @@ service cloud.firestore {
           && request.resource.data.get('role', null) in [null, 'super_admin']
           && request.resource.data.get('disabled', false) in [true, false]
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'disabled']));
-      allow delete: if false;
+      // 삭제(사용자 관리 화면의 "목록에서 제거")는 슈퍼관리자가 남의 프로필 문서를 지우는 경우만,
+      // 그것도 비활성화된 일반 계정에 한한다 — 정상 계정의 프로필이 실수로 지워져 disabled
+      // 표시가 사라지는 걸 막기 위해서다. 슈퍼관리자 계정은 이 경로로 못 지운다.
+      allow delete: if isSuperAdmin() && request.auth.uid != uid
+        && resource.data.get('disabled', false) == true
+        && resource.data.get('role', null) == null;
     }
   }
 }

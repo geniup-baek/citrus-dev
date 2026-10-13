@@ -88,6 +88,20 @@ export const useUserAdminStore = defineStore('userAdmin', () => {
     await refreshUsers()
   }
 
+  // 프로필 문서(users/{uid})까지 지워 목록에서 없앤다. Firebase Auth에서 이미 지운 계정의 찌꺼기를
+  // 정리하는 용도 — 인증 계정이 남아 있으면 그 사람이 다시 로그인할 때 프로필이 새로 만들어지고
+  // (비활성화 표시 없이) 되살아난다. 규칙상 비활성화된 일반 계정만 지울 수 있다.
+  async function removeProfile(uid) {
+    assertNotSelf(uid)
+    const owned = ownedFarmsOf(uid)
+    if (owned.length) {
+      throw new Error(`소유한 농장이 있습니다(${owned.map((f) => f.name).join(', ')}). 먼저 시스템 관리 → 농장에서 소유권을 이전하세요.`)
+    }
+    await Promise.all(membershipsOf(uid).map((m) => deleteDoc(doc(db, 'farms', m.farmId, 'members', uid))))
+    await deleteDoc(doc(db, 'users', uid))
+    await refreshUsers()
+  }
+
   // 비밀번호를 직접 바꿀 수는 없다(Admin SDK 필요) — 해당 이메일로 재설정 메일을 보낸다.
   async function sendPasswordReset(email) {
     if (!email) throw new Error('이메일이 없는 계정입니다.')
@@ -96,6 +110,6 @@ export const useUserAdminStore = defineStore('userAdmin', () => {
 
   return {
     users, memberships, loading, error, refreshUsers,
-    ownedFarmsOf, membershipsOf, setSuperAdmin, setDisabled, removeAccount, sendPasswordReset,
+    ownedFarmsOf, membershipsOf, setSuperAdmin, setDisabled, removeAccount, removeProfile, sendPasswordReset,
   }
 })

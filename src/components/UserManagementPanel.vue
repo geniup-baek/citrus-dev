@@ -80,6 +80,15 @@ async function removeAccount(user) {
   if (!ok) return
   await run(() => userAdminStore.removeAccount(user.uid))
 }
+async function removeProfile(user) {
+  const ok = await confirm({
+    title: '목록에서 제거',
+    message: `"${displayNameFor(user)}" 계정을 사용자 목록에서 제거할까요? Firebase 콘솔 → Authentication에서 이 계정을 이미 삭제한 경우에만 사용하세요. 인증 계정이 남아 있으면 그 사람이 다시 로그인할 때 비활성화 표시 없이 목록에 되살아납니다.`,
+    confirmLabel: '제거',
+  })
+  if (!ok) return
+  await run(() => userAdminStore.removeProfile(user.uid))
+}
 </script>
 
 <template>
@@ -127,6 +136,13 @@ async function removeAccount(user) {
             :title="user.role === 'super_admin' ? '슈퍼관리자는 먼저 권한을 회수해야 삭제할 수 있습니다' : ''"
             @click="removeAccount(user)"
           >삭제</button>
+          <button
+            v-if="user.disabled && user.role !== 'super_admin'"
+            class="danger compact-btn"
+            type="button"
+            title="Firebase 인증 계정을 이미 삭제한 경우, 이 목록에서도 완전히 제거합니다"
+            @click="removeProfile(user)"
+          >목록에서 제거</button>
         </div>
         <span v-else class="muted text-sm user-actions">본인 계정은 여기서 바꿀 수 없습니다(콘솔에서만).</span>
 

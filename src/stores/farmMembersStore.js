@@ -8,7 +8,7 @@ import { useAuthStore } from './authStore.js'
 import { uuid } from '../utils/uuid.js'
 import { PERMISSION_DOMAINS, canAccessFarm, canReadFarmDomain, canWriteFarmDomain } from '../utils/farmAccess.js'
 
-const EMAIL_PATTERN = /^[^@/s]+@[^@/s]+.[^@/s]+$/
+const EMAIL_PATTERN = /^[^@/\s]+@[^@/\s]+\.[^@/\s]+$/
 
 function emptyPermissions() {
   const p = {}

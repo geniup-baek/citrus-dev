@@ -162,6 +162,14 @@ export const useFarmsStore = defineStore('farms', () => {
     )
   }
 
+  // 그 이메일로 이미 가입한 계정이 있으면 uid를 찾아 바로 소유자로 연결한다(슈퍼관리자만 users를
+  // 조회할 수 있고, 이 함수들도 슈퍼관리자 화면에서만 쓴다). 아직 가입 전이면 null — 그 사람이
+  // 가입·로그인할 때 claimOwnedFarms가 연결한다.
+  async function findUidByEmail(email) {
+    const snap = await getDocs(query(collection(db, 'users'), where('email', '==', email)))
+    return snap.docs[0]?.id ?? null
+  }
+
   // 농장 생성은 슈퍼관리자만(규칙). 소유주는 이메일로 지정한다 — 가입 전 이메일도 가능하며,
   // 그 이메일로 가입·로그인하면 자동으로 소유권이 연결된다(claimOwnedFarms). 같은 배치에서
   // 그 이메일의 가입을 허용한다(signupAllowed).
@@ -182,6 +190,8 @@ export const useFarmsStore = defineStore('farms', () => {
     })
     batch.set(doc(db, 'signupAllowed', email), { farmId: id, at: new Date().toISOString() })
     await batch.commit()
+    const uid = await findUidByEmail(email).catch(() => null)
+    if (uid) await updateDoc(doc(db, 'farms', id), { ownerUid: uid })
     return id
   }
 
@@ -202,7 +212,8 @@ export const useFarmsStore = defineStore('farms', () => {
     const email = (ownerEmail || '').trim().toLowerCase()
     if (!email) throw new Error('소유주 이메일을 입력해 주세요.')
     const batch = writeBatch(db)
-    batch.update(doc(db, 'farms', id), { ownerEmail: email, ownerUid: null })
+    const uid = await findUidByEmail(email).catch(() => null)
+    batch.update(doc(db, 'farms', id), { ownerEmail: email, ownerUid: uid })
     batch.set(doc(db, 'signupAllowed', email), { farmId: id, at: new Date().toISOString() })
     await batch.commit()
   }
