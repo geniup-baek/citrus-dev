@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import {
-  collection, doc, getDoc, getDocs, onSnapshot, setDoc, deleteDoc, deleteField, query, where,
+  collection, doc, getDoc, getDocs, onSnapshot, setDoc, updateDoc, deleteDoc, deleteField, query, where, writeBatch,
 } from 'firebase/firestore'
 import { db, firebaseEnabled } from '../services/firebase.js'
 import { uuid } from '../utils/uuid.js'
@@ -23,8 +23,10 @@ export const useFarmsStore = defineStore('farms', () => {
   // 대신, 애초에 서버가 "내가 접근 가능한 농장만" 돌려주는 쿼리 2개를 합친다:
   //   1) ownedFarmsRaw — where('ownerUid','==',내 uid)로 실시간 구독(슈퍼관리자는
   //      필터 없이 전체 구독). firestore.rules가 이 쿼리 자체를 증명 가능하게 허용한다.
+  //      구독 전에 claimOwnedFarms()가 "내 이메일로 지정됐지만 아직 주인(uid)이 없는
+  //      농장"에 내 uid를 채워 넣는다(슈퍼관리자가 이메일로 농장을 만들기 때문).
   //   2) memberFarmDocs — farmMembersStore.myFarmIds(내가 구성원인 농장 id 목록,
-  //      컬렉션그룹 쿼리로 구함)에 있지만 위 1)에 없는 것만 개별 조회.
+  //      초대 수락 + 후보 id 개별 확인으로 구함)에 있지만 위 1)에 없는 것만 개별 조회.
   const ownedFarmsRaw = ref([])
   const memberFarmDocs = ref([])
   const ownedLoading = ref(true)
@@ -55,41 +57,29 @@ export const useFarmsStore = defineStore('farms', () => {
       .sort((a, b) => (b.deletedAt || '').localeCompare(a.deletedAt || '')),
   )
 
-  // localStorage에 키가 아예 없으면(null) "한 번도 선택한 적 없음" — 기존 단일 농장
-  // 사용자를 위한 최초 1회 자동 연속성 판단에 쓰인다. 이후로는 항상 명시적인 값('', 'farm', 'admin')을 갖는다.
-  const everChosen = localStorage.getItem(LS_MODE) !== null
   const modeLocal = ref(localStorage.getItem(LS_MODE) || '')
   const activeFarmIdLocal = ref(localStorage.getItem(LS_ACTIVE) || '')
 
   const isAdminMode = computed(() => modeLocal.value === 'admin')
 
-  // 로그인이 되어 있고 이 기기에 마지막으로 쓰던 농장이 남아 있으면(로그아웃하기
-  // 전까지 계속 유지) 선택 화면 없이 바로 그 농장으로 들어간다 — activeFarmIdLocal이
-  // farms 목록에 남아있는 한(=지금도 접근 가능) 항상 성립한다.
+  // 들어갈 농장 결정: 이 기기에 마지막으로 쓰던 농장이 아직 접근 가능하면(로그아웃하기
+  // 전까지 유지) 그 농장. 아니면 일반 사용자는 접근 가능한 농장이 정확히 1개일 때 선택
+  // 화면 없이 그 농장으로 바로 들어간다 — 선택 화면은 여러 개일 때만 뜬다. 슈퍼관리자는
+  // 시스템 관리 진입이 선택 화면에 있어서 마지막 선택이 없으면 항상 선택 화면을 본다.
   const activeFarm = computed(() => {
     if (isAdminMode.value) return null
-    return farms.value.find((f) => f.id === activeFarmIdLocal.value) || null
+    const remembered = farms.value.find((f) => f.id === activeFarmIdLocal.value)
+    if (remembered) return remembered
+    if (!authStore.isSuperAdmin && farms.value.length === 1) return farms.value[0]
+    return null
   })
 
-  const needsFarmCreate = computed(() => !loading.value && !isAdminMode.value && farms.value.length === 0)
-  const needsFarmSelect = computed(() => !loading.value && !isAdminMode.value && farms.value.length > 0 && !activeFarm.value)
-
-  // 최초 1회 자동 연속성: 한 번도 모드를 선택한 적 없고 접근 가능한 농장이 단
-  // 하나뿐이면 선택화면 없이 그 농장 모드로 바로 진입한다. 로그인 여부가 아직
-  // 확정 안 됐으면(loading) 접근 가능 목록이 일시적으로 불안정하므로 끝난 뒤에만 판단한다.
-  watch(
-    () => [loading.value, farms.value.length],
-    () => {
-      if (loading.value) return
-      if (!everChosen && !modeLocal.value && farms.value.length === 1) {
-        activeFarmIdLocal.value = farms.value[0].id
-        modeLocal.value = 'farm'
-        localStorage.setItem(LS_ACTIVE, farms.value[0].id)
-        localStorage.setItem(LS_MODE, 'farm')
-      }
-    },
-    { immediate: true },
-  )
+  // 일반 사용자가 접근 가능한 농장이 하나도 없음(아직 초대·소유권이 연결되지 않은 경우 등).
+  const noFarmAccess = computed(() =>
+    !loading.value && !isAdminMode.value && !authStore.isSuperAdmin && farms.value.length === 0)
+  const needsFarmSelect = computed(() =>
+    !loading.value && !isAdminMode.value && !activeFarm.value
+    && (authStore.isSuperAdmin || farms.value.length > 1))
 
   let unsubscribeOwned = null
   function subscribeOwnedFarms(uid, isSuperAdmin) {
@@ -100,6 +90,20 @@ export const useFarmsStore = defineStore('farms', () => {
       ownedFarmsRaw.value = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
       ownedLoading.value = false
     }, reportAccessError)
+  }
+
+  // 슈퍼관리자가 내 이메일로 지정해 둔(ownerEmail) 농장 중 아직 주인이 없는 것에 내 uid를
+  // 채운다(소유권 claim). 규칙이 인증된 이메일 일치 + ownerUid만 바뀌는 경우로 제한한다.
+  async function claimOwnedFarms(uid, email) {
+    if (!email) return
+    try {
+      const snap = await getDocs(query(collection(db, 'farms'), where('ownerEmail', '==', email.toLowerCase())))
+      await Promise.all(snap.docs
+        .filter((d) => (d.data().ownerUid ?? null) === null)
+        .map((d) => updateDoc(d.ref, { ownerUid: uid })))
+    } catch (e) {
+      console.warn('[farmsStore] 소유 농장 연결 실패', e)
+    }
   }
 
   async function refreshMemberFarmDocs(farmIds) {
@@ -132,15 +136,16 @@ export const useFarmsStore = defineStore('farms', () => {
     // 전환마다 다시) 농장 목록 구독을 연다 — 비로그인 상태에선 아예 아무것도
     // 구독하지 않는다(App.vue가 로그인 화면을 띄우므로 필요도 없다).
     watch(
-      () => [authStore.loading, authStore.user?.uid, authStore.isSuperAdmin],
-      ([authLoading, uid, isSuperAdmin]) => {
+      () => [authStore.loading, authStore.user?.uid, authStore.isSuperAdmin, authStore.needsEmailVerification],
+      async ([authLoading, uid, isSuperAdmin, needsVerification]) => {
         if (authLoading) return
-        if (!uid) {
+        if (!uid || needsVerification) {
           unsubscribeOwned?.()
           ownedFarmsRaw.value = []
           ownedLoading.value = false
           return
         }
+        if (!isSuperAdmin) await claimOwnedFarms(uid, authStore.user?.email)
         subscribeOwnedFarms(uid, isSuperAdmin)
       },
       { immediate: true },
@@ -157,19 +162,26 @@ export const useFarmsStore = defineStore('farms', () => {
     )
   }
 
-  async function createFarm({ name, logo = '' }) {
+  // 농장 생성은 슈퍼관리자만(규칙). 소유주는 이메일로 지정한다 — 가입 전 이메일도 가능하며,
+  // 그 이메일로 가입·로그인하면 자동으로 소유권이 연결된다(claimOwnedFarms). 같은 배치에서
+  // 그 이메일의 가입을 허용한다(signupAllowed).
+  async function createFarm({ name, logo = '', ownerEmail }) {
     const trimmed = name.trim()
     if (!trimmed) return null
-    const uid = authStore.user?.uid
-    if (!uid) throw new Error('로그인이 필요합니다.')
+    const email = (ownerEmail || '').trim().toLowerCase()
+    if (!email) throw new Error('소유주 이메일을 입력해 주세요.')
     const id = uuid()
-    await setDoc(doc(db, 'farms', id), {
+    const batch = writeBatch(db)
+    batch.set(doc(db, 'farms', id), {
       name: trimmed,
       logo,
       order: farms.value.length,
       createdAt: new Date().toISOString(),
-      ownerUid: uid,
+      ownerUid: null,
+      ownerEmail: email,
     })
+    batch.set(doc(db, 'signupAllowed', email), { farmId: id, at: new Date().toISOString() })
+    await batch.commit()
     return id
   }
 
@@ -183,14 +195,16 @@ export const useFarmsStore = defineStore('farms', () => {
     await setDoc(doc(db, 'farms', id), { logo: logo || '' }, { merge: true })
   }
 
-  // 소유권 이전(슈퍼관리자용). 공개 농장이 없으므로 항상 특정 계정으로만 옮길 수
-  // 있다(비워서 공개로 되돌리는 개념 자체가 없음). 규칙상 슈퍼관리자만 ownerUid를
-  // 바꿀 수 있고, 이 함수를 노출하는 FarmManagementPanel.vue도 슈퍼관리자만
-  // 들어올 수 있는 화면이다.
-  async function updateFarmOwner(id, ownerUid) {
-    const trimmed = (ownerUid || '').trim()
-    if (!trimmed) throw new Error('소유자 계정을 입력해 주세요.')
-    await setDoc(doc(db, 'farms', id), { ownerUid: trimmed }, { merge: true })
+  // 소유권 이전(슈퍼관리자용): 새 소유주를 이메일로 지정한다. ownerUid는 비워 두고(null),
+  // 새 소유주가 그 이메일로 로그인하면 claim된다 — 그때까지 이전 소유주는 접근 권한이
+  // 없다. 규칙상 슈퍼관리자만 소유권(ownerUid·ownerEmail)을 바꿀 수 있다.
+  async function updateFarmOwner(id, ownerEmail) {
+    const email = (ownerEmail || '').trim().toLowerCase()
+    if (!email) throw new Error('소유주 이메일을 입력해 주세요.')
+    const batch = writeBatch(db)
+    batch.update(doc(db, 'farms', id), { ownerEmail: email, ownerUid: null })
+    batch.set(doc(db, 'signupAllowed', email), { farmId: id, at: new Date().toISOString() })
+    await batch.commit()
   }
 
   // 목록에서만 뺀다(휴지통 보관) — 실제 데이터(farms/{id}/data/*, treatments/*)는 그대로 남아
@@ -244,7 +258,7 @@ export const useFarmsStore = defineStore('farms', () => {
 
   return {
     farms, deletedFarms, loading, accessError, reportAccessError,
-    activeFarm, isAdminMode, needsFarmCreate, needsFarmSelect,
+    activeFarm, isAdminMode, noFarmAccess, needsFarmSelect, farmCount: computed(() => farms.value.length),
     init, createFarm, renameFarm, updateFarmLogo, updateFarmOwner, deleteFarm, restoreFarm, permanentlyDeleteFarm,
     selectFarm, enterAdminMode, exitToSelector,
   }

@@ -89,3 +89,16 @@ export function formatFetchedAt(iso) {
   const pad = n => String(n).padStart(2, '0')
   return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
+
+// 로컬 실행 환경에서 가져와 Firestore에 공유해둔 OpenAPI 전건 캐시를, 직접 API 호출이 불가한
+// 배포 환경(GitHub Pages 등)에서도 쓸 수 있도록 동기화한다. pesticide:manual은 사용자가 직접
+// 등록한 농약 목록, pesticide:detail-index는 상세정보 중 목록에 없는 값(독성·주성분)만 뽑아
+// 압축한 색인 — 둘 다 같은 방식으로 기기 간 공유한다. sharedCache는 로그인해야 읽을 수
+// 있어서, 앱 시작 시가 아니라 로그인이 확인된 뒤(App.vue)에 한 번 호출한다.
+let sharedCachesPulled = false
+export function pullAllSharedCaches() {
+  if (sharedCachesPulled) return
+  sharedCachesPulled = true
+  ;['pesticide:all', 'pesticide:manual', 'pesticide:detail-index', 'pest:diseases:all', 'pest:pathogens:all', 'pest:insects:all', 'pest:prediction']
+    .forEach((key) => pullSharedCache(key))
+}

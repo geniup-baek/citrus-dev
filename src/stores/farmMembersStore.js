@@ -1,21 +1,14 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import {
-  collection, doc, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, arrayUnion, runTransaction,
+  collection, doc, getDoc, getDocs, updateDoc, deleteDoc, onSnapshot, arrayUnion, query, where, writeBatch,
 } from 'firebase/firestore'
 import { db, firebaseEnabled } from '../services/firebase.js'
 import { useAuthStore } from './authStore.js'
+import { uuid } from '../utils/uuid.js'
 import { PERMISSION_DOMAINS, canAccessFarm, canReadFarmDomain, canWriteFarmDomain } from '../utils/farmAccess.js'
 
-// 사람이 말로 전달하거나(카톡 등) 손으로 입력하기 쉽게 8자, 헷갈리기 쉬운 0/O/1/I/L 제외.
-const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
-function generateInviteCode() {
-  let code = ''
-  for (let i = 0; i < 8; i++) {
-    code += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]
-  }
-  return code
-}
+const EMAIL_PATTERN = /^[^@/s]+@[^@/s]+.[^@/s]+$/
 
 function emptyPermissions() {
   const p = {}
@@ -31,16 +24,16 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
   const myFarmIdsLoading = ref(true)
   let globalInitialized = false
 
-  // ⚠ farms/{farmId}/members 컬렉션그룹을 내 uid로 직접 걸러 찾는 방식(where('uid',
-  // '==',내 uid))을 시도했으나 실측으로 거부됨을 확인했다 — firestore.rules의
-  // members list 규칙에 있는 isOwner(farmId) 항이 문서마다 다른 farmId(경로)에
-  // 의존해서, Firestore가 "쿼리 결과 전체에 대해 증명 가능"을 판단할 때 그 항
-  // 때문에 전체를 증명 불가로 본다(다른 항이 uid로 이미 걸려 있어도 소용없음).
-  // 그래서 users/{uid}.memberFarmIds는 "후보" 목록으로 남겨둔다(구성원에서
-  // 빠졌는데 아직 안 지워졌을 수 있음) — 실제로 그 농장의 members/{uid} 문서가
-  // 지금도 있는지 하나씩 확인해서만 반영한다. 구성원 변경이 잦지 않은 앱이라
-  // 로그인 시점 1회 확인이면 충분하다(다른 농장별 스토어처럼 실시간 구독까지는 안 함).
+  // farms/{farmId}/members 컬렉션그룹을 내 uid로 걸러 찾는 방식(where('uid','==',내 uid))은
+  // 처음 시도했을 때 거부됐다. 원인은 컬렉션그룹 쿼리용 {path=**} 규칙이 없어서였을
+  // 가능성이 크지만(firestore.rules의 members 주석 참고) 일반 구성원 쪽은 끝까지
+  // 확인하지 못했다. 그래서 users/{uid}.memberFarmIds는 "후보" 목록으로 남겨둔다(구성원에서
+  // 빠졌는데 아직 안 지워졌을 수 있음) — 실제로 그 농장의 members/{uid} 문서가 지금도
+  // 있는지 하나씩 확인해서만 반영한다. 구성원 변경이 잦지 않은 앱이라 로그인 시점 1회
+  // 확인이면 충분하다(다른 농장별 스토어처럼 실시간 구독까지는 안 함).
   async function refreshMyFarmIds() {
+    // 내 이메일로 온 초대를 먼저 수락(구성원 문서 생성)한 뒤 후보 목록을 확인한다.
+    await claimInvitations()
     const uid = authStore.user?.uid
     if (!firebaseEnabled || !db || !uid) {
       myFarmIds.value = []
@@ -77,9 +70,10 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
     // 로그인해도(로그아웃 상태→로그인) 다시 안 불린다. uid도 함께 지켜봐서 로그인/
     // 로그아웃/계정 전환마다 다시 확인한다.
     watch(
-      () => [authStore.loading, authStore.user?.uid],
-      ([loading]) => {
+      () => [authStore.loading, authStore.user?.uid, authStore.needsEmailVerification],
+      ([loading, , needsVerification]) => {
         if (loading) return
+        if (needsVerification) { myFarmIds.value = []; myFarmIdsLoading.value = false; return }
         refreshMyFarmIds()
       },
       { immediate: true },
@@ -92,7 +86,7 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
   const isOwnerOfActiveFarm = ref(false)
   const members = ref([]) // 소유자·슈퍼관리자일 때만 채워짐(구성원 전체 목록)
   const myMembership = ref(null) // 내 members/{uid} 문서(구성원일 때)
-  const inviteCodeRefs = ref([]) // 발급된 초대 코드 목록(소유자용)
+  const invitations = ref([]) // 아직 수락하지 않은 이메일 초대 목록(소유자용)
   // 내 권한 문서 구독이 첫 응답을 받기 전까지 true — router 가드가 이 값이 false가
   // 될 때까지 기다려서, 아직 권한을 확인 못 한 걸 "권한 없음"으로 오판해 쫓아내지
   // 않게 한다(소유자·슈퍼관리자는 canRead/canWrite가 이 값과 무관하게 먼저 통과됨).
@@ -107,7 +101,7 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
     isOwnerOfActiveFarm.value = !!(authStore.user?.uid && farm?.ownerUid === authStore.user.uid)
     members.value = []
     myMembership.value = null
-    inviteCodeRefs.value = []
+    invitations.value = []
     perFarmLoading.value = true
     if (!firebaseEnabled || !db) { perFarmLoading.value = false; return }
 
@@ -128,11 +122,11 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
       onSnapshot(collection(db, 'farms', farmId, 'members'), (snap) => {
         members.value = snap.docs.map((d) => ({ uid: d.id, ...d.data() }))
       }, (err) => console.warn('[farmMembersStore] 구성원 목록 구독 실패', err))
-      onSnapshot(collection(db, 'farms', farmId, 'inviteCodeRefs'), (snap) => {
-        inviteCodeRefs.value = snap.docs
-          .map((d) => ({ code: d.id, ...d.data() }))
+      onSnapshot(collection(db, 'farms', farmId, 'invitations'), (snap) => {
+        invitations.value = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
           .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
-      }, (err) => console.warn('[farmMembersStore] 초대 코드 목록 구독 실패', err))
+      }, (err) => console.warn('[farmMembersStore] 초대 목록 구독 실패', err))
     }
   }
 
@@ -171,22 +165,34 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
   }
 
   // ── 소유자 액션 ──────────────────────────────────────────────────────────
-  async function createInviteCode(permissions) {
+  // 농장종사자를 이메일로 초대한다(농장주·슈퍼관리자). 초대 문서 + 농장 쪽 미러 +
+  // 가입 허용 표시를 한 배치로 쓴다. 안내메일 발송은 호출자(UI)가 inviteMail 서비스로
+  // 이어서 한다. 그 이메일로 가입·로그인하면 claimInvitations()가 구성원으로 연결한다.
+  async function inviteWorker(emailInput, permissions) {
     const farmId = activeFarmId.value
-    if (!farmId) return null
-    const code = generateInviteCode()
+    if (!farmId) throw new Error('농장이 선택되지 않았습니다.')
+    const email = (emailInput || '').trim().toLowerCase()
+    if (!EMAIL_PATTERN.test(email)) throw new Error('이메일 형식이 올바르지 않습니다.')
+    if (members.value.some((m) => (m.email || '').toLowerCase() === email)) throw new Error('이미 이 농장의 구성원입니다.')
+    if (invitations.value.some((i) => i.email === email)) throw new Error('이미 초대한 이메일입니다. 초대 목록에서 안내메일을 다시 보낼 수 있습니다.')
+    const id = uuid()
     const createdAt = new Date().toISOString()
-    const createdBy = authStore.user?.uid || null
-    await setDoc(doc(db, 'inviteCodes', code), { farmId, permissions, createdAt, createdBy })
-    await setDoc(doc(db, 'farms', farmId, 'inviteCodeRefs', code), { permissions, createdAt })
-    return code
+    const data = { email, farmId, permissions, invitedBy: authStore.user?.uid || null, createdAt }
+    const batch = writeBatch(db)
+    batch.set(doc(db, 'invitations', id), data)
+    batch.set(doc(db, 'farms', farmId, 'invitations', id), data)
+    batch.set(doc(db, 'signupAllowed', email), { farmId, at: createdAt })
+    await batch.commit()
+    return email
   }
 
-  async function revokeInviteCode(code) {
+  async function revokeInvitation(invitation) {
     const farmId = activeFarmId.value
     if (!farmId) return
-    await deleteDoc(doc(db, 'inviteCodes', code)).catch(() => {})
-    await deleteDoc(doc(db, 'farms', farmId, 'inviteCodeRefs', code))
+    const batch = writeBatch(db)
+    batch.delete(doc(db, 'invitations', invitation.id))
+    batch.delete(doc(db, 'farms', farmId, 'invitations', invitation.id))
+    await batch.commit()
   }
 
   async function updateMemberPermissions(memberUid, permissions) {
@@ -201,57 +207,47 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
     await deleteDoc(doc(db, 'farms', farmId, 'members', memberUid))
   }
 
-  // ── 구성원 액션(참여) ────────────────────────────────────────────────────
-  // 활성 농장 여부와 무관하게(농장 선택 화면에서) 호출된다.
-  // "코드에 claimedBy 표시" + "멤버 문서 생성"을 하나의 트랜잭션으로 묶어서, 같은
-  // 코드로 동시에 참여를 시도해도 정확히 한 명만 성공한다(Firestore 트랜잭션의
-  // 낙관적 동시성 제어 + firestore.rules의 claimedBy 체크가 같이 막아줌).
-  async function joinFarmWithCode(code) {
+  // ── 구성원 액션(초대 수락) ───────────────────────────────────────────────
+  // 로그인(인증된 이메일)할 때마다 내 이메일로 온 초대를 구성원 문서로 바꾼다. 초대 문서의
+  // farmId·permissions를 그대로 옮기며(규칙이 일치를 검사), 수락한 초대와 농장 쪽 미러는
+  // 같은 배치에서 지운다. 한 건이 실패(예: 이미 구성원)해도 나머지는 계속 처리한다.
+  async function claimInvitations() {
     const uid = authStore.user?.uid
-    if (!uid) throw new Error('로그인이 필요합니다.')
-    const trimmed = code.trim().toUpperCase()
-    if (!trimmed) throw new Error('코드를 입력해 주세요.')
-
-    const codeRef = doc(db, 'inviteCodes', trimmed)
-    let farmId
+    const email = (authStore.user?.email || '').toLowerCase()
+    if (!firebaseEnabled || !db || !uid || !email) return
     try {
-      farmId = await runTransaction(db, async (transaction) => {
-        const codeSnap = await transaction.get(codeRef)
-        if (!codeSnap.exists()) throw new Error('유효하지 않은 코드입니다.')
-        const data = codeSnap.data()
-        if (data.claimedBy) throw new Error('이미 사용된 코드입니다.')
-        transaction.update(codeRef, { claimedBy: uid, claimedAt: new Date().toISOString() })
-        // uid는 문서 id와 중복이지만 규칙(members create)이 이 값을 request.auth.uid와
-        // 같도록 강제해 둔다 — 문서만 보고도(예: 관리자 콘솔) 소유자를 바로 알 수 있다.
-        transaction.set(doc(db, 'farms', data.farmId, 'members', uid), {
-          uid,
-          permissions: data.permissions,
-          email: authStore.user.email || '',
-          displayName: authStore.user.displayName || '',
-          joinedAt: new Date().toISOString(),
-          joinedViaCode: trimmed,
-        })
-        return data.farmId
-      })
+      const snap = await getDocs(query(collection(db, 'invitations'), where('email', '==', email)))
+      for (const inv of snap.docs) {
+        const data = inv.data()
+        try {
+          const batch = writeBatch(db)
+          batch.set(doc(db, 'farms', data.farmId, 'members', uid), {
+            uid,
+            permissions: data.permissions,
+            email: authStore.user.email,
+            displayName: authStore.user.displayName || '',
+            joinedAt: new Date().toISOString(),
+            joinedViaInvitation: inv.id,
+          })
+          batch.delete(inv.ref)
+          batch.delete(doc(db, 'farms', data.farmId, 'invitations', inv.id))
+          await batch.commit()
+          await updateDoc(doc(db, 'users', uid), { memberFarmIds: arrayUnion(data.farmId) })
+        } catch (e) {
+          console.warn('[farmMembersStore] 초대 수락 실패', inv.id, e)
+        }
+      }
     } catch (e) {
-      // 트랜잭션이 규칙에 막혀 거부되면(예: 경합에서 진 쪽) permission-denied로
-      // 온다 — 사용자에게는 "이미 사용됨"이 더 정확한 설명이다.
-      if (e.code === 'permission-denied') throw new Error('이미 사용된 코드입니다.')
-      throw e
+      console.warn('[farmMembersStore] 초대 목록 조회 실패', e)
     }
-
-    await updateDoc(doc(db, 'users', uid), { memberFarmIds: arrayUnion(farmId) })
-    await deleteDoc(codeRef).catch(() => {})
-    await refreshMyFarmIds()
-    return farmId
   }
 
   return {
     myFarmIds, myFarmIdsLoading, initGlobal,
-    activeFarmId, isOwnerOfActiveFarm, members, myMembership, myPermissions, inviteCodeRefs, perFarmLoading,
+    activeFarmId, isOwnerOfActiveFarm, members, myMembership, myPermissions, invitations, perFarmLoading,
     hasFullAccess, ready,
     init, canRead, canWrite,
-    createInviteCode, revokeInviteCode, updateMemberPermissions, removeMember, joinFarmWithCode,
+    inviteWorker, revokeInvitation, updateMemberPermissions, removeMember, claimInvitations,
     emptyPermissions,
   }
 })

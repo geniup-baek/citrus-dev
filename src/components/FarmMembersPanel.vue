@@ -1,10 +1,15 @@
 <script setup>
 import { reactive, ref } from 'vue'
 import { useFarmMembersStore } from '../stores/farmMembersStore'
+import { useFarmsStore } from '../stores/farmsStore'
+import { useAuthStore } from '../stores/authStore'
+import { deliverInviteMail, emailAutoSendEnabled } from '../services/inviteMail'
 import { PERMISSION_DOMAINS } from '../utils/farmAccess'
 import { confirm } from '../composables/useConfirm'
 
 const farmMembersStore = useFarmMembersStore()
+const farmsStore = useFarmsStore()
+const authStore = useAuthStore()
 
 const DOMAIN_LABELS = {
   facilities: '재배동',
@@ -50,57 +55,67 @@ async function confirmRemoveMember(member) {
   await farmMembersStore.removeMember(member.uid)
 }
 
-// ── 초대 코드 발급 ──────────────────────────────────────────────────────────
+// ── 이메일로 농장종사자 초대 ────────────────────────────────────────────────
 const showInviteForm = ref(false)
+const inviteEmail = ref('')
 const invitePermissions = reactive(farmMembersStore.emptyPermissions())
-const issuedCode = ref('')
-const copyMessage = ref('')
+const inviteBusy = ref(false)
+const inviteMessage = ref('')
+const inviteError = ref('')
 
 function openInviteForm() {
   showInviteForm.value = true
-  issuedCode.value = ''
+  inviteEmail.value = ''
+  inviteMessage.value = ''
+  inviteError.value = ''
   Object.assign(invitePermissions, farmMembersStore.emptyPermissions())
 }
 
+function mailParams(email) {
+  return {
+    email,
+    role: 'worker',
+    farmName: farmsStore.activeFarm?.name || '',
+    inviterName: authStore.user?.displayName || authStore.user?.email || '',
+  }
+}
+
+function mailNotice(method, email) {
+  return method === 'emailjs'
+    ? `${email} 로 안내메일을 보냈습니다.`
+    : '메일 앱이 열렸습니다. 내용을 확인하고 보내기를 눌러 주세요.'
+}
+
 async function submitInvite() {
-  issuedCode.value = await farmMembersStore.createInviteCode(JSON.parse(JSON.stringify(invitePermissions)))
-}
-
-// navigator.clipboard는 보안 컨텍스트(HTTPS 또는 localhost)에서만 제공된다 —
-// 예를 들어 LAN IP로 연 개발 서버(http://192.168.x.x:...)처럼 비보안 컨텍스트에서는
-// 아예 없거나 호출이 거부된다(src/utils/uuid.js의 crypto.randomUUID 처리와 같은 문제).
-// 옛 방식(execCommand('copy'))은 보안 컨텍스트가 아니어도 대부분 브라우저에서 동작해서
-// 그걸로 한 번 더 시도한 뒤에야 진짜 실패로 본다.
-function legacyCopy(code) {
-  const textarea = document.createElement('textarea')
-  textarea.value = code
-  textarea.style.position = 'fixed'
-  textarea.style.opacity = '0'
-  document.body.appendChild(textarea)
-  textarea.focus()
-  textarea.select()
+  if (inviteBusy.value) return
+  inviteError.value = ''
+  inviteMessage.value = ''
+  inviteBusy.value = true
   try {
-    return document.execCommand('copy')
+    const email = await farmMembersStore.inviteWorker(inviteEmail.value, JSON.parse(JSON.stringify(invitePermissions)))
+    const method = await deliverInviteMail(mailParams(email))
+    inviteMessage.value = mailNotice(method, email)
+    inviteEmail.value = ''
+  } catch (e) {
+    inviteError.value = e.message || '초대하지 못했습니다.'
   } finally {
-    textarea.remove()
+    inviteBusy.value = false
   }
 }
 
-async function copyCode(code) {
+async function resendMail(invitation) {
   try {
-    if (!navigator.clipboard?.writeText) throw new Error('clipboard API unavailable')
-    await navigator.clipboard.writeText(code)
-    copyMessage.value = '복사했습니다.'
-  } catch {
-    copyMessage.value = legacyCopy(code) ? '복사했습니다.' : '복사에 실패했습니다. 직접 선택해 복사해 주세요.'
+    const method = await deliverInviteMail(mailParams(invitation.email))
+    inviteMessage.value = mailNotice(method, invitation.email)
+  } catch (e) {
+    inviteError.value = e.message || '메일을 보내지 못했습니다.'
   }
-  setTimeout(() => { copyMessage.value = '' }, 2000)
 }
 
-async function confirmRevokeCode(code) {
-  const ok = await confirm({ message: '이 초대 코드를 폐기할까요? 아직 참여하지 않은 사람은 더 이상 이 코드로 참여할 수 없습니다.' })
+async function confirmRevokeInvitation(invitation) {
+  const ok = await confirm({ message: `${invitation.email} 님의 초대를 취소할까요? 아직 가입·참여하지 않았다면 더 이상 참여할 수 없습니다.` })
   if (!ok) return
-  await farmMembersStore.revokeInviteCode(code)
+  await farmMembersStore.revokeInvitation(invitation)
 }
 </script>
 
@@ -144,7 +159,14 @@ async function confirmRevokeCode(code) {
 
     <template v-if="showInviteForm">
       <div class="stack-form" style="margin-top: 0.75rem;">
-        <p class="muted text-sm">부여할 권한을 고른 뒤 발급하세요. 발급된 코드를 카톡 등으로 전달하면, 받은 사람이 농장 선택 화면에서 그 코드를 입력해 이 권한 그대로 합류합니다.</p>
+        <p class="muted text-sm">
+          초대할 사람의 이메일과 부여할 권한을 정하세요. 안내메일(앱 설치·회원가입 방법)이 발송되고,
+          그 이메일로 가입·로그인하면 이 권한 그대로 농장에 합류합니다.
+          <template v-if="!emailAutoSendEnabled">(자동 발송이 설정되지 않아 메일 앱이 열립니다.)</template>
+        </p>
+        <label>이메일
+          <input v-model="inviteEmail" type="email" autocomplete="off" placeholder="worker@example.com" />
+        </label>
         <ul class="list clean compact permission-grid">
           <li v-for="domain in PERMISSION_DOMAINS" :key="domain" class="permission-row">
             <span class="permission-label">{{ DOMAIN_LABELS[domain] }}</span>
@@ -161,26 +183,25 @@ async function confirmRevokeCode(code) {
           <button class="ghost compact-btn" type="button" @click="setAll(invitePermissions, 'write', true)">전체 쓰기</button>
         </div>
         <div class="row-actions">
-          <button type="button" @click="submitInvite">코드 발급</button>
+          <button type="button" :disabled="inviteBusy || !inviteEmail.trim()" @click="submitInvite">
+            {{ inviteBusy ? '처리 중...' : '초대하고 안내메일 보내기' }}
+          </button>
           <button class="ghost" type="button" @click="showInviteForm = false">닫기</button>
         </div>
-        <p v-if="issuedCode" class="muted">
-          발급된 코드: <strong>{{ issuedCode }}</strong>
-          <button class="ghost compact-btn" type="button" @click="copyCode(issuedCode)">복사</button>
-          {{ copyMessage }}
-        </p>
+        <p v-if="inviteError" class="settings-error">{{ inviteError }}</p>
+        <p v-if="inviteMessage" class="muted text-sm">{{ inviteMessage }}</p>
       </div>
     </template>
     <button v-else type="button" style="margin-top: 0.5rem;" @click="openInviteForm">농장종사자 초대</button>
 
-    <div v-if="farmMembersStore.inviteCodeRefs.length" style="margin-top: 1rem;">
-      <p class="muted text-sm">발급된 초대 코드</p>
+    <div v-if="farmMembersStore.invitations.length" style="margin-top: 1rem;">
+      <p class="muted text-sm">초대 대기 (아직 가입·참여하지 않음)</p>
       <ul class="list clean compact">
-        <li v-for="ref_ in farmMembersStore.inviteCodeRefs" :key="ref_.code" class="list-item settings-item">
-          <span class="settings-item-name">{{ ref_.code }}</span>
+        <li v-for="inv in farmMembersStore.invitations" :key="inv.id" class="list-item settings-item">
+          <span class="settings-item-name">{{ inv.email }}</span>
           <div class="row-actions">
-            <button class="ghost compact-btn" type="button" @click="copyCode(ref_.code)">복사</button>
-            <button class="danger compact-btn" type="button" @click="confirmRevokeCode(ref_.code)">폐기</button>
+            <button class="ghost compact-btn" type="button" @click="resendMail(inv)">안내메일 다시 보내기</button>
+            <button class="danger compact-btn" type="button" @click="confirmRevokeInvitation(inv)">취소</button>
           </div>
         </li>
       </ul>

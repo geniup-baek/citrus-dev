@@ -2,11 +2,9 @@
 import { ref } from 'vue'
 import { useFarmsStore } from '../stores/farmsStore'
 import { useAuthStore } from '../stores/authStore'
-import { useFarmMembersStore } from '../stores/farmMembersStore'
 
 const farmsStore = useFarmsStore()
 const authStore = useAuthStore()
-const farmMembersStore = useFarmMembersStore()
 
 // 이 화면은 로그인된 상태에서만 뜬다(App.vue가 로그인 여부를 먼저 가른다). 농장은
 // 클릭하면 바로 들어간다 — 공개 농장이 없어지면서 농장 PIN도 같이 없앴다(관리자
@@ -67,31 +65,6 @@ async function handleLogout() {
   await authStore.signOutUser()
 }
 
-// ── 초대 코드로 농장 참여 ───────────────────────────────────────────────────
-const showJoinForm = ref(false)
-const joinCodeInput = ref('')
-const joinSubmitting = ref(false)
-const joinError = ref('')
-
-function openJoinForm() {
-  showJoinForm.value = true
-  joinCodeInput.value = ''
-  joinError.value = ''
-}
-
-async function submitJoinCode() {
-  if (joinSubmitting.value) return
-  joinError.value = ''
-  joinSubmitting.value = true
-  try {
-    const farmId = await farmMembersStore.joinFarmWithCode(joinCodeInput.value)
-    farmsStore.selectFarm(farmId)
-  } catch (e) {
-    joinError.value = e.message || '참여에 실패했습니다.'
-  } finally {
-    joinSubmitting.value = false
-  }
-}
 </script>
 
 <template>
@@ -119,32 +92,9 @@ async function submitJoinCode() {
         </div>
       </template>
 
-      <template v-else-if="showJoinForm">
-        <h2>농장 참여</h2>
-        <p class="muted">농장주에게 받은 초대 코드를 입력하면, 그 코드에 담긴 권한 그대로 농장에 합류합니다.</p>
-        <div class="stack-form">
-          <label>초대 코드
-            <input
-              v-model="joinCodeInput"
-              type="text"
-              autofocus
-              placeholder="예: AB23CD45"
-              @keydown.enter.prevent="submitJoinCode"
-            />
-          </label>
-          <p v-if="joinError" class="settings-error">{{ joinError }}</p>
-          <div class="row-actions">
-            <button type="button" :disabled="joinSubmitting || !joinCodeInput.trim()" @click="submitJoinCode">
-              {{ joinSubmitting ? '참여하는 중...' : '참여' }}
-            </button>
-            <button class="ghost" type="button" @click="showJoinForm = false">취소</button>
-          </div>
-        </div>
-      </template>
-
       <template v-else>
-        <h2>농장 선택</h2>
-        <p class="muted">작업할 농장을 선택하세요. 농장마다 재배동·작업·재고·방제이력이 독립적으로 관리됩니다.</p>
+        <h2>{{ farmsStore.noFarmAccess ? '농장이 없습니다' : '농장 선택' }}</h2>
+        <p v-if="farmsStore.farms.length" class="muted">작업할 농장을 선택하세요. 농장마다 재배동·작업·재고·방제이력이 독립적으로 관리됩니다.</p>
 
         <ul v-if="farmsStore.farms.length" class="list clean farm-select-grid">
           <li
@@ -158,20 +108,20 @@ async function submitJoinCode() {
               <span v-else>{{ farm.name?.[0] ?? '?' }}</span>
             </span>
             <span class="item-title">{{ farm.name }}</span>
+            <span v-if="farm.ownerUid && farm.ownerUid === authStore.user?.uid" class="pill">농장주</span>
           </li>
         </ul>
         <p v-else class="muted">
-          아직 소유하거나 소속된 농장이 없습니다. 시스템 관리자에게 농장 소유권을 배정받거나,
-          농장주에게 초대 코드를 받아 참여하세요.
+          이 계정({{ authStore.user?.email }})으로 접근할 수 있는 농장이 없습니다. 슈퍼관리자나
+          농장주에게 이 이메일로 농장 소유주 지정 또는 초대를 요청하세요.
         </p>
 
         <div class="row-actions farm-auth-entry">
           <span class="muted text-sm">로그인됨: {{ authStore.user?.email }}</span>
           <button class="ghost compact-btn" type="button" @click="handleLogout">로그아웃</button>
-          <button class="ghost compact-btn" type="button" @click="openJoinForm">초대 코드로 참여</button>
         </div>
 
-        <div class="farm-admin-entry">
+        <div v-if="authStore.isSuperAdmin" class="farm-admin-entry">
           <button class="ghost" type="button" @click="handleAdminClick">시스템 관리</button>
           <p class="muted text-sm">농장 등록·관리, 병해충·농약 공통 정보 갱신, 분류·항목 설정, 전체 농장 백업/복원을 관리합니다.</p>
           <p v-if="adminAccessError" class="settings-error">{{ adminAccessError }}</p>

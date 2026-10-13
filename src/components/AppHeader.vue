@@ -62,7 +62,7 @@ watch(activePath, revealActiveLink)
 <template>
   <header class="app-header">
     <div class="header-top-row">
-      <div>
+      <div class="header-title">
         <p class="eyebrow">{{ localeStore.t('header.eyebrow') }} <span class="app-version">(v{{ appVersion }})</span></p>
         <h1>{{ localeStore.t('header.title') }}</h1>
       </div>
@@ -77,9 +77,19 @@ watch(activePath, revealActiveLink)
             <span v-else>{{ farmsStore.activeFarm.name?.[0] ?? '?' }}</span>
           </span>
           <span class="active-farm-name">{{ farmsStore.activeFarm.name }}</span>
-          <button class="ghost compact-btn" type="button" @click="farmsStore.exitToSelector">농장 전환</button>
+          <span
+            v-if="farmsStore.activeFarm.ownerUid && farmsStore.activeFarm.ownerUid === authStore.user?.uid"
+            class="pill"
+          >농장주</span>
+          <button
+            v-if="authStore.isSuperAdmin || farmsStore.farmCount > 1"
+            class="ghost compact-btn"
+            type="button"
+            @click="farmsStore.exitToSelector"
+          >농장 전환</button>
         </div>
         <div v-if="authStore.isLoggedIn" class="auth-status">
+          <span v-if="authStore.isSuperAdmin" class="pill">슈퍼관리자</span>
           <span class="muted text-sm auth-email">{{ authStore.user.email }}</span>
           <button class="ghost compact-btn" type="button" @click="authStore.signOutUser">로그아웃</button>
         </div>
@@ -171,12 +181,25 @@ watch(activePath, revealActiveLink)
     font-size: 0.75rem;
     padding: 0.15rem 0.45rem;
   }
-  /* 좁은 화면에서는 농장뱃지(로고+이름+농장전환 버튼) + 로그인 표시(이메일+로그아웃
-     버튼)가 한 줄(nowrap)에 다 안 들어가 제목/버튼 글자가 세로로 깨진다. 로그인
-     상태·로그아웃은 농장 선택 화면(농장 전환 버튼으로 갈 수 있음)에 이미 있으니,
-     좁은 화면에서는 헤더의 로그인 표시를 아예 감춘다 — 데스크톱에서만 보인다. */
-  .auth-status {
+  /* 좁은 화면에서는 이메일은 감추고 로그아웃 버튼만 남긴다 — 접근 가능한 농장이 1개뿐인
+     사용자는 농장 선택 화면(로그아웃 버튼이 있는 곳)을 거치지 않으므로, 헤더에서 바로
+     로그아웃할 수 있어야 한다. 이메일은 데스크톱에서만 보인다. */
+  /* 좁은 화면에서는 앱 제목을 감추고 농장·로그아웃을 한 줄에 둔다. */
+  .header-title {
     display: none;
+  }
+  .header-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .auth-email {
+    display: none;
+  }
+  .auth-status {
+    flex-shrink: 0;
+  }
+  .active-farm-name {
+    max-width: 9rem;
   }
 }
 </style>

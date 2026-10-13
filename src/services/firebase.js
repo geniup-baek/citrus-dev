@@ -17,6 +17,8 @@ export const firebaseEnabled = Object.values(config).every(Boolean)
 const app = firebaseEnabled ? initializeApp(config) : null
 const db = app ? getFirestore(app) : null
 const auth = app ? getAuth(app) : null
+// 인증 메일(이메일 인증·비밀번호 재설정)을 한국어 템플릿으로 보낸다.
+if (auth) auth.languageCode = 'ko'
 
 // 일반 firestore(db)는 실시간 리스너(onSnapshot)를 위해 영속 스트림(Write stream)을 쓴다 —
 // 이 스트림에는 "한 번에 대기 가능한 쓰기 수" 자체에 내부 한도가 있어, writeBatch로 요청을

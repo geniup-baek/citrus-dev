@@ -30,7 +30,7 @@ service cloud.firestore {
     // data[key])은 에러를 내고, 그 에러는 ||로 감싸도 상황에 따라 그대로 거부로
     // 이어질 수 있다.
     function isOwner(farmId) {
-      return request.auth != null
+      return isActive()
         && exists(/databases/$(database)/documents/farms/$(farmId))
         && get(/databases/$(database)/documents/farms/$(farmId)).data.get('ownerUid', null) == request.auth.uid;
     }
@@ -38,6 +38,31 @@ service cloud.firestore {
       return request.auth != null
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'super_admin';
+    }
+    // 슈퍼관리자가 비활성화한 계정(users/{uid}.disabled == true). 클라이언트만으로는
+    // 남의 Firebase Auth 계정을 비활성화할 수 없어서(Admin SDK 필요, 이 앱엔 백엔드가
+    // 없다) 앱 차원에서 막는다 — 로그인 자체는 되지만 아래 접근 게이트들이 전부 거부한다.
+    // isSuperAdmin()과 같은 users/{uid} 문서를 읽으므로 한 번의 규칙 평가 안에서는
+    // 캐시된다(슈퍼관리자 판단이 같이 걸리는 경로 기준).
+    function isDisabled() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('disabled', false) == true;
+    }
+    // 로그인했고 비활성화되지 않은 계정.
+    function isActive() { return request.auth != null && !isDisabled(); }
+    // 이메일 인증을 마친 계정(Firebase Auth 토큰의 email_verified). 이메일로 초대·소유권을
+    // 인정하는 모든 경로는 이걸 요구한다 — 인증 없이 남의 이메일로 가입만 해 두고
+    // 그 사람 몫의 초대를 가로채는 걸 막는다.
+    function isVerified() {
+      return request.auth != null && request.auth.token.get('email_verified', false) == true;
+    }
+    // 인증된 내 이메일이 이 값과 같은가(이메일은 항상 소문자로 저장·비교한다).
+    function isEmail(email) {
+      return isVerified() && request.auth.token.get('email', '') == email;
+    }
+    function validEmail(e) {
+      return e is string && e.size() <= 200 && e == e.lower() && e.matches('^[^@/ ]+@[^@/ ]+[.][^@/ ]+$');
     }
     // 부모 농장 문서가 없으면(완전 삭제 중 일부만 지워진 상태 등) 접근을 막지 않는다
     // — 안 그러면 그 상태에서 아무도(관리자도) 남은 데이터를 정리할 수 없게 된다.
@@ -55,7 +80,7 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/farms/$(farmId)/members/$(request.auth.uid)).data;
     }
     function isMemberOfFarm(farmId) {
-      return request.auth != null
+      return isActive()
         && exists(/databases/$(database)/documents/farms/$(farmId)/members/$(request.auth.uid));
     }
     function memberPermission(farmId, domain, mode) {
@@ -94,24 +119,38 @@ service cloud.firestore {
     match /shared/appSettings {
       // 분류·항목 설정(작업 분류, 재배 품종, 농약 종류 등) — 모든 농장이 공유하는
       // 공통 설정. 앱 전체가 로그인 필수라 로그인만 확인한다.
-      allow read, write: if request.auth != null;
+      allow read, write: if isActive();
     }
     match /farms/{farmId} {
       // 농장 등록 정보(이름·로고·소유자). 공개 농장이 없으므로 로그인한 사람 중
       // 소유자·구성원·슈퍼관리자만 개별 문서를 읽을 수 있다.
       allow get: if isSuperAdmin() || isOwner(farmId) || isMemberOfFarm(farmId);
-      // list(예: where('ownerUid','==',내 uid))는 "쿼리 결과 전체에 대해 규칙이
-      // 항상 성립함을 증명"할 수 있어야 허용된다. 슈퍼관리자는 쿼리 조건과 무관하게
-      // 항상 증명 가능(전체 목록 화면용). 그 외엔 쿼리 자체가 ownerUid == 내 uid로
-      // 걸려 있을 때만 허용 — 그 필터가 이미 조건을 보장하므로 증명 가능하다.
-      // 구성원으로만 속한 농장은 이 list로 찾지 않는다(개별 get으로 찾음,
-      // farmsStore.js/farmMembersStore.js 참고) — 그래서 isMemberOfFarm은 여기 없다.
-      allow list: if isSuperAdmin() || resource.data.ownerUid == request.auth.uid;
-      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;
-      // 소유자는 자기 농장 정보(이름·로고 등)를 수정할 수 있지만 소유권(ownerUid)
-      // 자체는 못 바꾼다 — 소유권 이전은 슈퍼관리자 전용(FarmManagementPanel.vue).
+      // list는 "쿼리 결과 전체에 대해 규칙이 항상 성립함을 증명"할 수 있어야 허용된다.
+      // 슈퍼관리자는 쿼리 조건과 무관하게 항상 증명 가능(전체 목록 화면용). 그 외엔 쿼리
+      // 자체가 where('ownerUid','==',내 uid)(내 농장)나 where('ownerEmail','==',내
+      // 인증된 이메일)(아직 uid가 안 채워진 "내 몫 농장" — 아래 소유권 claim)로 걸려
+      // 있을 때만 허용 — 그 필터가 이미 조건을 보장하므로 증명 가능하다. 구성원으로만
+      // 속한 농장은 이 list로 찾지 않는다(개별 get으로 찾음).
+      allow list: if isSuperAdmin()
+        || (isActive() && resource.data.get('ownerUid', null) == request.auth.uid)
+        || (isActive() && isEmail(resource.data.get('ownerEmail', '')));
+      // 농장은 슈퍼관리자만 만들고, 소유주는 이메일로 지정한다(미가입 이메일도 가능).
+      // ownerUid는 소유주가 그 이메일로 가입·로그인해 claim할 때 채워진다.
+      allow create: if isSuperAdmin()
+        && request.resource.data.get('ownerUid', null) == null
+        && validEmail(request.resource.data.get('ownerEmail', null));
+      // 소유자는 자기 농장 정보(이름·로고 등)를 수정할 수 있지만 소유권(ownerUid·
+      // ownerEmail)은 못 바꾼다 — 소유권 이전은 슈퍼관리자 전용(FarmManagementPanel.vue).
+      // 소유권 claim: 아직 주인(uid)이 없는 농장을, 그 농장에 지정된 이메일로 인증된
+      // 사람이 자기 uid로 1회 채운다(다른 필드는 못 건드림).
       allow update: if isSuperAdmin()
-        || (isOwner(farmId) && request.resource.data.ownerUid == resource.data.ownerUid);
+        || (isOwner(farmId)
+          && request.resource.data.get('ownerUid', null) == resource.data.get('ownerUid', null)
+          && request.resource.data.get('ownerEmail', '') == resource.data.get('ownerEmail', ''))
+        || (isActive() && resource.data.get('ownerUid', null) == null
+          && isEmail(resource.data.get('ownerEmail', ''))
+          && request.resource.data.ownerUid == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ownerUid']));
       allow delete: if isSuperAdmin() || isOwner(farmId);
     }
     match /farms/{farmId}/data/{docId} {
@@ -130,53 +169,49 @@ service cloud.firestore {
     }
     match /farms/{farmId}/members/{memberUid} {
       // 농장종사자 권한 문서. 본인·소유자·슈퍼관리자만 단건으로 읽을 수 있다(다른
-      // 구성원의 권한 구성을 서로 못 봄). 생성은 본인 uid로만, 그리고 초대 코드
-      // (inviteCodes)가 실제로 존재하고 그 코드의 farmId/permissions와 정확히
-      // 일치할 때만 — 권한을 스스로 부풀려 적어 넣는 걸 막는다(코드에 적힌 것만
-      // 그대로 받아 적을 수 있음). 이후 권한 수정·제거는 소유자·슈퍼관리자만.
+      // 구성원의 권한 구성을 서로 못 봄). 생성은 본인 uid로만, 그리고 그 농장 소유자가
+      // 내 이메일로 만든 초대(invitations)가 실제로 있고 그 초대의 farmId/permissions와
+      // 정확히 일치할 때만 — 권한을 스스로 부풀려 적어 넣는 걸 막는다. 이후 권한
+      // 수정·제거는 소유자·슈퍼관리자만.
       allow get: if request.auth != null
         && (request.auth.uid == memberUid || isOwner(farmId) || isSuperAdmin());
       // list는 농장 하나의 구성원 전체 목록(소유자·슈퍼관리자 전용 "구성원" 화면 —
       // farms/{farmId}/members 컬렉션을 그 farmId로 구독)에만 쓴다 — farmId가
       // 경로에서 고정되므로 isOwner(farmId)가 결과 전체에 대해 증명 가능하다.
-      // ⚠ "내가 어느 농장들의 구성원인지" 찾는 컬렉션그룹 쿼리(collectionGroup
-      // ('members').where('uid','==',내 uid))는 시도해봤으나 실측으로 거부됨을
-      // 확인했다 — isOwner(farmId) 항이 문서마다 다른 farmId에 의존해서(경로가
-      // 매 문서마다 다름), Firestore가 "결과 전체에 대해 증명 가능"을 판단할 때
-      // 이 항 때문에 전체를 증명 불가로 본다(uid 필드로 걸린 다른 항이 있어도
-      // 소용없음 — OR의 한쪽 항이 못 증명되면 전체가 거부됨). 그래서 구성원
-      // 자격 조회는 users/{uid}.memberFarmIds(후보) + 개별 get() 검증 방식을
-      // 그대로 쓴다(farmMembersStore.js의 refreshMyFarmIds).
+      // ⚠ "내가 어느 농장들의 구성원인지"를 컬렉션그룹 쿼리(collectionGroup('members').
+      // where('uid','==',내 uid))로 찾으려던 시도는 거부됐다. 당시엔 그 원인을 "isOwner
+      // (farmId) 항이 문서마다 다른 farmId에 의존해서 증명 불가"라고 적어 뒀지만, 나중에
+      // 확인해 보니 컬렉션그룹 쿼리는 아래처럼 {path=**} 재귀 와일드카드 규칙이 따로 있어야
+      // 허용되는데 그게 없었던 게 원인일 가능성이 크다(그 규칙을 슈퍼관리자용으로 추가하니
+      // 슈퍼관리자의 컬렉션그룹 조회는 바로 통과했다). 일반 구성원이 자기 멤버십을 같은
+      // 방식으로 찾는 건 색인 생성이 안 끝나 끝까지 확인하지 못했다(미확정). 그래서 구성원
+      // 자격 조회는 users/{uid}.memberFarmIds(후보) + 개별 get() 검증 방식을 그대로 쓴다
+      // (farmMembersStore.js의 refreshMyFarmIds).
       allow list: if isSuperAdmin() || isOwner(farmId);
-      allow create: if request.auth != null && request.auth.uid == memberUid
-        && request.resource.data.keys().hasOnly(['uid', 'permissions', 'email', 'displayName', 'joinedAt', 'joinedViaCode'])
+      allow create: if isActive() && isVerified() && request.auth.uid == memberUid
+        && request.resource.data.keys().hasOnly(['uid', 'permissions', 'email', 'displayName', 'joinedAt', 'joinedViaInvitation'])
         && request.resource.data.uid == request.auth.uid
-        // email은 로그인 토큰의 실제 이메일과 같아야 한다 — 안 그러면 가입자가
+        // email은 로그인 토큰의 (인증된) 이메일과 같아야 한다 — 안 그러면 가입자가
         // 남의 이메일을 자기 것처럼 적어 넣어(신뢰할 수 있는 정보처럼 보이게)
         // 농장주를 속일 수 있다.
         && request.resource.data.get('email', '') == request.auth.token.get('email', '')
-        // joinedViaCode가 빈 문자열이 아님을 먼저 확인한 뒤에야 그 값으로 경로를
+        // joinedViaInvitation이 빈 문자열이 아님을 먼저 확인한 뒤에야 그 값으로 경로를
         // 만든다 — 빈 문자열로 exists()/get() 경로를 바로 만들면 어떻게 처리되는지
-        // 불확실해(문서 경로 마지막 세그먼트가 비는 경우) 아예 그 상황 자체를 피한다.
-        && request.resource.data.get('joinedViaCode', '') != ''
-        && exists(/databases/$(database)/documents/inviteCodes/$(request.resource.data.joinedViaCode))
-        && get(/databases/$(database)/documents/inviteCodes/$(request.resource.data.joinedViaCode)).data.farmId == farmId
-        // 아직 누구도 claim 안 했거나(구버전 코드 호환), 바로 나 자신이 claim한
-        // 코드일 때만 — 남이 이미 claim한 코드로는 멤버를 못 만든다. claim(코드에
-        // claimedBy 표시) 후 이 create를 호출하는 게 joinFarmWithCode의 정상 흐름
-        // 이라, "아직도 null"이 아니라 "내가 claim함"을 정상 케이스로 봐야 한다.
-        && (get(/databases/$(database)/documents/inviteCodes/$(request.resource.data.joinedViaCode)).data.get('claimedBy', null) == null
-          || get(/databases/$(database)/documents/inviteCodes/$(request.resource.data.joinedViaCode)).data.claimedBy == request.auth.uid)
+        // 불확실해 아예 그 상황 자체를 피한다.
+        && request.resource.data.get('joinedViaInvitation', '') != ''
+        && exists(/databases/$(database)/documents/invitations/$(request.resource.data.joinedViaInvitation))
+        && get(/databases/$(database)/documents/invitations/$(request.resource.data.joinedViaInvitation)).data.farmId == farmId
+        && get(/databases/$(database)/documents/invitations/$(request.resource.data.joinedViaInvitation)).data.email == request.auth.token.get('email', '')
         && request.resource.data.permissions
-           == get(/databases/$(database)/documents/inviteCodes/$(request.resource.data.joinedViaCode)).data.permissions;
+           == get(/databases/$(database)/documents/invitations/$(request.resource.data.joinedViaInvitation)).data.permissions;
       allow update, delete: if isOwner(farmId) || isSuperAdmin();
     }
-    match /farms/{farmId}/inviteCodeRefs/{code} {
-      // inviteCodes/{code}(최상위)의 존재를 농장별로 목록화하기 위한 참조 문서.
-      // 최상위 inviteCodes는 list를 금지해서(열거 방지) 소유자가 자기 농장에 발급한
-      // 코드 목록을 조회할 수단이 없다 — 이 서브컬렉션은 path만으로 접근을 판단해서
-      // (resource.data를 안 보므로) list 쿼리에도 안전하게 쓸 수 있다.
-      allow read, write: if isOwner(farmId) || isSuperAdmin();
+    // 슈퍼관리자 전용: 모든 농장의 구성원을 한 번에 조회하는 컬렉션그룹 쿼리(사용자 관리
+    // 화면의 "계정별 소속 농장"). 컬렉션그룹 쿼리는 이렇게 {path=**} 재귀 와일드카드로
+    // 컬렉션 이름을 잡는 규칙이 따로 있어야 허용된다(위 farms/{farmId}/members 규칙은
+    // 컬렉션그룹 쿼리에 적용되지 않는다 — rules_version 2).
+    match /{path=**}/members/{memberUid} {
+      allow list: if isSuperAdmin();
     }
     // 사진 문서에 도메인(재배동/작업 등) 구분은 없다 — changeLog와 같은 수준으로
     // "그 농장 구성원이면 다 보인다"로 단순화한다. canAccessFarm과 달리 "농장 문서가
@@ -210,30 +245,49 @@ service cloud.firestore {
       //   pesticide:manual — 공공데이터에 없어 직접 등록한 농약 목록
       //   app:policy       — 전 기기 공통 정책(농약 직접등록 권한 등)
       // 앱 전체가 로그인 필수라 로그인만 확인한다.
-      allow read, write: if request.auth != null;
+      allow read, write: if isActive();
     }
-    match /inviteCodes/{code} {
-      // 농장종사자 초대 코드 — 최상위 컬렉션. 농장 PIN과 같은 수준의 "짧은 공유
-      // 코드" 신뢰 모델이다(강한 암호화 대상 아님, 카톡 등으로 전달 전제).
-      // get은 로그인한 사람 누구나(코드를 입력해 확인하는 용도), list는 금지해
-      // 전체 코드 목록을 나열(열거)하지 못하게 한다.
-      allow get: if request.auth != null;
+    // 농장 소유자가 직원을 이메일로 초대한 기록(최상위). 초대받은 사람이 자기 이메일로
+    // 인증된 로그인을 하면 앱이 이 문서를 보고 구성원 문서를 만들고(위 members create 규칙)
+    // 초대를 지운다. list는 내 인증된 이메일로 건 쿼리(where('email','==',내 이메일))만
+    // 허용 — 필터가 조건을 보장해 증명 가능하고, 남의 초대를 나열할 수는 없다.
+    function validInvitation(d) {
+      return d.keys().hasOnly(['email', 'farmId', 'permissions', 'invitedBy', 'createdAt'])
+        && validEmail(d.get('email', null))
+        && d.get('farmId', '') is string && d.get('farmId', '') != ''
+        && d.get('permissions', null) is map;
+    }
+    match /invitations/{inviteId} {
+      allow get: if isSuperAdmin() || isEmail(resource.data.get('email', '')) || isOwner(resource.data.get('farmId', ''));
+      allow list: if isSuperAdmin() || (isActive() && isEmail(resource.data.get('email', '')));
+      allow create: if isActive() && validInvitation(request.resource.data)
+        && request.resource.data.invitedBy == request.auth.uid
+        && (isSuperAdmin() || isOwner(request.resource.data.farmId));
+      allow delete: if isSuperAdmin() || isOwner(resource.data.get('farmId', '')) || isEmail(resource.data.get('email', ''));
+    }
+    // 같은 초대를 농장 쪽에서 목록화하기 위한 미러(소유자의 "초대 대기" 목록). 최상위
+    // invitations는 이메일 기준 list만 허용해서 소유자가 자기 농장의 초대 목록을 조회할
+    // 수단이 없다 — 이 서브컬렉션은 path만으로 접근을 판단해서(resource.data를 안 보므로)
+    // list 쿼리에도 안전하다. 초대받은 사람은 참여하면서 자기 초대의 미러도 지운다.
+    match /farms/{farmId}/invitations/{inviteId} {
+      allow read: if isOwner(farmId) || isSuperAdmin();
+      allow create, update: if isActive() && validInvitation(request.resource.data)
+        && request.resource.data.farmId == farmId
+        && (isSuperAdmin() || isOwner(farmId));
+      allow delete: if isOwner(farmId) || isSuperAdmin() || isEmail(resource.data.get('email', ''));
+    }
+    // 가입 허용 이메일 표시 — 가입 화면이 "초대된 이메일인지"를 계정 만들기 전에 확인하는
+    // 용도(그래서 비로그인 get만 허용). 내용은 없다(농장 id, 시각뿐). 이건 UX용 1차 차단일
+    // 뿐이고(SDK를 직접 쓰면 우회해 계정은 만들 수 있다), 진짜 접근 통제는 초대·소유권을
+    // 인증된 이메일로만 인정하는 위 규칙들이 한다 — 우회해 만든 계정은 아무 권한이 없다.
+    match /signupAllowed/{email} {
+      allow get: if true;
       allow list: if false;
-      allow create: if request.auth != null
-        && request.resource.data.keys().hasOnly(['farmId', 'permissions', 'createdAt', 'createdBy'])
-        && request.resource.data.get('farmId', '') != ''
-        && (isOwner(request.resource.data.farmId) || isSuperAdmin());
-      // 삭제(사용 후 정리·폐기)는 로그인한 사람 누구나.
-      allow delete: if request.auth != null;
-      // claimedBy는 "아직 아무도 안 씀(null) → 나로 1회 표시"만 허용한다 — 이미
-      // 누가 표시해 둔 코드는 못 덮어쓴다. farms/{farmId}/members/{memberUid}의
-      // create 규칙이 이 claimedBy를 같이 확인하므로, 같은 트랜잭션(joinFarmWithCode)
-      // 안에서 두 문서(코드 표시 + 구성원 생성)를 같이 써서 동시에 같은 코드로
-      // 참여를 시도해도 하나만 성공한다(Firestore 트랜잭션의 낙관적 동시성 제어).
-      allow update: if request.auth != null
-        && resource.data.get('claimedBy', null) == null
-        && request.resource.data.get('claimedBy', null) == request.auth.uid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimedBy', 'claimedAt']);
+      allow create, update: if isActive()
+        && request.resource.data.keys().hasOnly(['farmId', 'at'])
+        && request.resource.data.farmId is string && request.resource.data.farmId != ''
+        && (isSuperAdmin() || isOwner(request.resource.data.farmId));
+      allow delete: if isSuperAdmin();
     }
     match /users/{uid} {
       // 로그인 사용자 프로필. get(단건)은 본인만 — 슈퍼관리자 판단(isSuperAdmin 위
@@ -241,20 +295,22 @@ service cloud.firestore {
       // list(전체 목록)는 슈퍼관리자만 — 전역 사용자 관리 화면(UserManagementPanel.vue)이
       // 이걸로 가입자 목록을 보여준다. role은 본인이 스스로 설정/변경할 수 없다
       // (자기 자신에게 권한을 부여하는 걸 막기 위함, 콘솔에서 수동으로만 최초 부여) —
-      // create엔 role 필드 자체를 금지한다.
+      // create엔 role·disabled 필드 자체를 금지한다.
       allow get: if request.auth != null && request.auth.uid == uid;
       allow list: if isSuperAdmin();
       allow create: if request.auth != null && request.auth.uid == uid
-        && !('role' in request.resource.data);
-      // role이 그대로 유지되는 수정(프로필 정보 등)은 본인 또는 슈퍼관리자. role
-      // 자체를 바꾸는 수정은 슈퍼관리자가 "남의" 문서에 한해서만 가능(본인 role은
-      // 이 경로로도 못 바꾼다 — 자기 자신에게 권한을 부여/유지하는 걸 막기 위함) —
-      // 전역 사용자 관리 화면의 권한 부여/회수가 이 분기를 쓴다.
-      allow update: if request.resource.data.get('role', null) == resource.data.get('role', null)
+        && !('role' in request.resource.data) && !('disabled' in request.resource.data);
+      // role·disabled가 그대로 유지되는 수정(프로필 정보 등)은 본인 또는 슈퍼관리자.
+      // role/disabled를 바꾸는 수정은 슈퍼관리자가 "남의" 문서에 한해서만 가능하다
+      // (본인은 못 바꾼다 — 자기에게 권한을 주거나 비활성화된 계정이 스스로 푸는 걸
+      // 막기 위함). 슈퍼관리자는 1명 이상일 수 있다(최초 1명은 콘솔에서 지정).
+      allow update: if (request.resource.data.get('role', null) == resource.data.get('role', null)
+          && request.resource.data.get('disabled', false) == resource.data.get('disabled', false))
         ? (request.auth != null && request.auth.uid == uid || isSuperAdmin())
         : (isSuperAdmin() && request.auth.uid != uid
           && request.resource.data.get('role', null) in [null, 'super_admin']
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role']));
+          && request.resource.data.get('disabled', false) in [true, false]
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'disabled']));
       allow delete: if false;
     }
   }

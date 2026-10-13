@@ -4,6 +4,7 @@ import AppHeader from './components/AppHeader.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import FarmSelectScreen from './components/FarmSelectScreen.vue'
 import LoginScreen from './components/LoginScreen.vue'
+import VerifyEmailScreen from './components/VerifyEmailScreen.vue'
 import { useFarmStore } from './stores/farmStore'
 import { useLocaleStore } from './stores/localeStore'
 import { useTreatmentStore } from './stores/treatmentStore'
@@ -14,6 +15,7 @@ import { useFarmMembersStore } from './stores/farmMembersStore'
 import { useAppPolicyStore } from './stores/appPolicyStore'
 import { useAuthStore } from './stores/authStore'
 import { useTaskNotifier } from './composables/useTaskNotifier'
+import { pullAllSharedCaches } from './services/cache'
 
 const store = useFarmStore()
 const localeStore = useLocaleStore()
@@ -33,11 +35,12 @@ onMounted(() => {
 })
 
 watch(
-  () => [authStore.loading, authStore.isLoggedIn, store.firebaseEnabled],
-  ([authLoading, isLoggedIn, firebaseEnabled]) => {
+  () => [authStore.loading, authStore.isLoggedIn, authStore.isDisabled, authStore.needsEmailVerification, store.firebaseEnabled],
+  ([authLoading, isLoggedIn, isDisabled, needsVerification, firebaseEnabled]) => {
     if (authLoading) return
-    if (firebaseEnabled && !isLoggedIn) return // 로그인 화면만 보여준다.
+    if (firebaseEnabled && (!isLoggedIn || isDisabled || needsVerification)) return // 로그인/차단/이메일 인증 화면만 보여준다.
     farmsStore.init()
+    pullAllSharedCaches()
     // 전 기기 공통 정책은 농장 선택과 무관하므로 관리 모드에서도 바로 동기화한다.
     policyStore.init()
     // 분류·항목(appSettings)도 모든 농장이 공유하므로 관리 모드에서도 실시간 데이터를 읽어야 한다.
@@ -76,6 +79,19 @@ useTaskNotifier(store)
 
     <LoginScreen v-else-if="store.firebaseEnabled && !authStore.isLoggedIn" />
 
+    <div v-else-if="authStore.isDisabled" class="farm-gate">
+      <div class="card farm-gate-card">
+        <h2>비활성화된 계정입니다</h2>
+        <p class="muted">
+          {{ authStore.user?.email }} 계정은 관리자에 의해 비활성화되어 앱을 사용할 수 없습니다.
+          필요하면 관리자에게 문의하세요.
+        </p>
+        <button type="button" @click="authStore.signOutUser">로그아웃</button>
+      </div>
+    </div>
+
+    <VerifyEmailScreen v-else-if="authStore.needsEmailVerification" />
+
     <p v-else-if="farmsStore.loading" class="muted farm-gate-loading">불러오는 중...</p>
 
     <div v-else-if="farmsStore.accessError" class="farm-gate">
@@ -89,7 +105,7 @@ useTaskNotifier(store)
       </div>
     </div>
 
-    <FarmSelectScreen v-else-if="farmsStore.needsFarmCreate || farmsStore.needsFarmSelect" />
+    <FarmSelectScreen v-else-if="farmsStore.noFarmAccess || farmsStore.needsFarmSelect" />
 
     <template v-else>
       <AppHeader />

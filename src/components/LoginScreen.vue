@@ -49,7 +49,10 @@ async function handleForgotPassword() {
   <div class="farm-gate">
     <div class="card farm-gate-card">
       <h2>{{ authMode === 'signup' ? '회원가입' : '로그인' }}</h2>
-      <p class="muted">로그인해야 농장을 사용할 수 있습니다.</p>
+      <p class="muted">
+        <template v-if="authMode === 'signup'">슈퍼관리자나 농장주가 초대한(안내메일을 받은) 이메일로만 가입할 수 있습니다.</template>
+        <template v-else>로그인해야 농장을 사용할 수 있습니다.</template>
+      </p>
       <div class="stack-form">
         <label>이메일
           <input v-model="authEmail" type="email" autocomplete="email" autofocus placeholder="you@example.com" />
