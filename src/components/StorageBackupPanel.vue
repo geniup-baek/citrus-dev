@@ -7,6 +7,7 @@ import { useTreatmentStore } from '../stores/treatmentStore'
 import { useRecommendSettingsStore } from '../stores/recommendSettingsStore'
 import { useAvailablePesticideStore } from '../stores/availablePesticideStore'
 import { useFarmsStore } from '../stores/farmsStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { db, firebaseEnabled } from '../services/firebase'
 import { DOMAIN_KEYS } from '../utils/farmDataSchema.js'
 import { exportAllFarmsBackup, isValidAllFarmsBackup, allFarmsBackupSummary, restoreAllFarmsBackup } from '../services/adminBackup.js'
@@ -17,6 +18,9 @@ const treatStore = useTreatmentStore()
 const recSettingsStore = useRecommendSettingsStore()
 const apStore = useAvailablePesticideStore()
 const farmsStore = useFarmsStore()
+const farmMembersStore = useFarmMembersStore()
+// 복원은 농장 전체 데이터를 덮어쓰므로 저장·백업 쓰기 권한이 있어야 한다(읽기만이면 내보내기만 가능).
+const canRestore = computed(() => farmsStore.isAdminMode || farmMembersStore.canUse('backup', 'write'))
 
 // ── 저장공간 사용 현황 ────────────────────────────────────────────────────────
 const LOCAL_STORAGE_QUOTA_BYTES = 5 * 1024 * 1024 // 브라우저마다 다르나 보수적으로 5MB 가정
@@ -436,7 +440,7 @@ async function confirmAdminRestore() {
 
     <div class="row-actions settings-backup-actions">
       <button type="button" :disabled="exporting" @click="exportBackup">{{ exporting ? '내보내는 중...' : localeStore.t('settings.backupExport') }}</button>
-      <button class="ghost" type="button" @click="restoreInput?.click()">{{ localeStore.t('settings.backupImport') }}</button>
+      <button v-if="canRestore" class="ghost" type="button" @click="restoreInput?.click()">{{ localeStore.t('settings.backupImport') }}</button>
       <input ref="restoreInput" accept="application/json,.json" type="file" hidden @change="handleRestoreFile" />
     </div>
 

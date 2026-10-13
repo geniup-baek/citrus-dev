@@ -2,9 +2,10 @@
 // 사용자가 변경할 수 있는 모든 데이터를 백업한다.
 // (annualTaskTemplates = 앱 고정 템플릿, notifications = 시스템 추적값이므로 제외)
 import { doc, getDoc } from 'firebase/firestore'
-import { doc as liteDoc, writeBatch as liteWriteBatch } from 'firebase/firestore/lite'
+import { doc as liteDoc, setDoc as liteSetDoc, writeBatch as liteWriteBatch } from 'firebase/firestore/lite'
 import { db, dbLite, firebaseEnabled } from '../../services/firebase'
 import { CHANGE_LOG_LIMIT } from './changeLog.js'
+import { uuid } from '../../utils/uuid.js'
 import {
   normalizeAppSettings,
   normalizeFarmData,
@@ -28,6 +29,23 @@ export function createBackupActions(ctx) {
     photoCache, currentReferencedPhotoIds, migrateInlinePhotos,
     appSettingsLsKey, scheduleAppSettingsWrite, getFarmId,
   } = ctx
+
+  // 복원된 데이터 안의 사진 참조 id를 바꾼다(참조 위치는 photos.js의 currentReferencedPhotoIds와 같다).
+  function remapPhotoIds(idMap) {
+    const visit = (arr) => {
+      if (!Array.isArray(arr)) return
+      for (const p of arr) if (p?.id && idMap[p.id]) p.id = idMap[p.id]
+    }
+    state.value.facilities?.forEach((f) => visit(f.photos))
+    state.value.ancillaries?.forEach((a) => visit(a.photos))
+    state.value.seedlings?.forEach((sd) => sd.growthLogs?.forEach((l) => visit(l.photos)))
+    state.value.tasks?.forEach((t) => t.logs?.forEach((l) => visit(l.photos)))
+    state.value.issues?.forEach((i) => {
+      visit(i.photos)
+      i.resolutionSteps?.forEach((st) => visit(st.photos))
+    })
+    state.value.usageGuides?.forEach((g) => g.steps?.forEach((st) => visit(st.photos)))
+  }
 
   function exportBackup() {
     const data = {}
@@ -161,6 +179,10 @@ export function createBackupActions(ctx) {
         const photoEntries = Object.entries(photosMap).filter(([, photo]) => photo?.dataUrl)
         const MAX_BATCH_OPS = 20
         const MAX_BATCH_BYTES = 3 * 1024 * 1024 // Firestore 배치 요청 전체 한도(~10MiB)에 크게 여유를 둔다
+        // 같은 id의 사진이 이미 다른 농장 것으로 있으면(예: 다른 농장의 백업을 이 농장에 복원) 그 문서를
+        // 덮어쓸 수 없다(규칙: 사진의 농장은 바꿀 수 없음) — 그 사진은 새 id로 따로 저장하고, 복원된
+        // 데이터의 참조 id를 새 id로 바꿔 준다(아래 remapPhotoIds).
+        const idMap = {}
         let idx = 0
         while (idx < photoEntries.length) {
           const batch = liteWriteBatch(dbLite)
@@ -187,9 +209,31 @@ export function createBackupActions(ctx) {
               photoCache.value = { ...photoCache.value, [id]: photo.dataUrl }
             }
           } catch (e) {
-            console.warn('[farmStore] 백업 사진 복원 실패(배치)', batchEntries.map(([id]) => id), e)
+            console.warn('[farmStore] 백업 사진 복원 실패(배치) — 하나씩 다시 시도', batchEntries.map(([id]) => id), e)
+            for (const [id, photo] of batchEntries) {
+              const payloadDoc = {
+                dataUrl: photo.dataUrl,
+                contentType: photo.contentType || 'image/jpeg',
+                createdAt: photo.createdAt || new Date().toISOString(),
+                farmId: getFarmId(),
+              }
+              try {
+                await liteSetDoc(liteDoc(dbLite, 'photos', id), payloadDoc)
+                photoCache.value = { ...photoCache.value, [id]: photo.dataUrl }
+              } catch {
+                const newId = uuid()
+                try {
+                  await liteSetDoc(liteDoc(dbLite, 'photos', newId), payloadDoc)
+                  idMap[id] = newId
+                  photoCache.value = { ...photoCache.value, [newId]: photo.dataUrl }
+                } catch (err) {
+                  console.warn('[farmStore] 백업 사진 복원 실패', id, err)
+                }
+              }
+            }
           }
         }
+        if (Object.keys(idMap).length) remapPhotoIds(idMap)
       } else {
         // 로컬 전용 모드: 사진을 배열에 다시 인라인해 localStorage에 보존
         const inject = (arr) => {

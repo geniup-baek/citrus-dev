@@ -4,6 +4,7 @@ import { useFarmStore } from '../stores/farmStore'
 import { useTreatmentStore } from '../stores/treatmentStore'
 import { useRecommendSettingsStore } from '../stores/recommendSettingsStore'
 import { useAppPolicyStore } from '../stores/appPolicyStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { confirm } from '../composables/useConfirm'
 import MobileFilterBar from './MobileFilterBar.vue'
 import OverflowMenu from './OverflowMenu.vue'
@@ -12,13 +13,9 @@ const store = useFarmStore()
 const treatStore = useTreatmentStore()
 const recSettingsStore = useRecommendSettingsStore()
 const policyStore = useAppPolicyStore()
-
-const actorNameInput = ref(store.actorName)
-
-function saveActorName() {
-  store.setActorName(actorNameInput.value)
-  actorNameInput.value = store.actorName
-}
+const farmMembersStore = useFarmMembersStore()
+// 이력 읽기만 받은 구성원은 되돌리기·삭제를 쓸 수 없다.
+const canEditHistory = computed(() => farmMembersStore.canUse('changeLog', 'write'))
 
 const historyEntityFilter = ref('전체')
 
@@ -136,31 +133,10 @@ async function clearAllChangeLog() {
 <template>
   <div class="sub-card">
     <div class="settings-group-head">
-      <h3>내 이름 표시</h3>
-    </div>
-    <p class="muted settings-group-hint">
-      이 기기에서 변경 이력에 남길 이름입니다. 로그인 없이 기기에만 저장되며, 다른 기기와 공유되지 않습니다.
-    </p>
-    <div class="row-actions">
-      <input
-        v-model="actorNameInput"
-        class="settings-edit-input"
-        type="text"
-        placeholder="예: 홍길동"
-        style="max-width: 14rem;"
-        @keydown.enter.prevent="saveActorName"
-        @blur="saveActorName"
-      />
-      <button class="ghost compact-btn" type="button" @click="saveActorName">저장</button>
-    </div>
-  </div>
-
-  <div class="sub-card">
-    <div class="settings-group-head">
       <h3>변경 이력</h3>
       <div class="row-actions">
         <span class="pill">{{ filteredChangeLog.length }}건</span>
-        <OverflowMenu v-if="showChangeLogDeleteButton && store.state.changeLog?.length" title="더보기">
+        <OverflowMenu v-if="canEditHistory && showChangeLogDeleteButton && store.state.changeLog?.length" title="더보기">
           <button class="danger compact-btn" type="button" @click="clearAllChangeLog">전체 삭제</button>
         </OverflowMenu>
       </div>
@@ -191,7 +167,7 @@ async function clearAllChangeLog() {
             {{ formatHistoryAt(entry.at) }}<template v-if="entry.actor"> · {{ entry.actor }}</template>
           </span>
           <button
-            v-if="canRevertEntry(entry)"
+            v-if="canEditHistory && canRevertEntry(entry)"
             class="ghost compact-btn"
             type="button"
             :disabled="revertingId === entry.id"
@@ -199,7 +175,7 @@ async function clearAllChangeLog() {
             @click="revertHistoryEntry(entry)"
           >{{ revertingId === entry.id ? '되돌리는 중...' : '되돌리기' }}</button>
           <button
-            v-if="showChangeLogDeleteButton"
+            v-if="canEditHistory && showChangeLogDeleteButton"
             class="ghost compact-btn history-delete-btn"
             type="button"
             title="이 항목 삭제"

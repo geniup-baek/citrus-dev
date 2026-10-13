@@ -21,6 +21,7 @@ import { createUsageGuideActions } from './farmStore/usageGuides.js'
 import { createInventoryActions } from './farmStore/inventory.js'
 import { createBackupActions } from './farmStore/backup.js'
 import { useFarmsStore } from './farmsStore.js'
+import { useAuthStore } from './authStore.js'
 import { useFarmMembersStore } from './farmMembersStore.js'
 import { LS_PREFIX } from '../utils/storagePrefix.js'
 
@@ -32,7 +33,7 @@ import { LS_PREFIX } from '../utils/storagePrefix.js'
 // src/utils/farmDataSchema.js의 DOMAIN_SYNC 참고) — 예전엔 farmData 문서 하나에 전부 있었다.
 
 const APP_SETTINGS_LS_KEY = `${LS_PREFIX}:app-settings` // 공통(농장 무관) 분류·항목 설정
-const ACTOR_NAME_LS_KEY = `${LS_PREFIX}:actor-name` // 이 기기에서 변경 이력에 표시할 이름(기기별 로컬 저장, 서버 동기화 안 함)
+const ACTOR_NAME_LS_KEY = `${LS_PREFIX}:actor-name` // 예전에 기기별로 입력해 두던 이름 — 이제 로그인 계정에서 가져오므로 남은 값만 지운다
 
 export const useFarmStore = defineStore('farm', () => {
   const initialized = ref(false)
@@ -41,21 +42,13 @@ export const useFarmStore = defineStore('farm', () => {
   let appSettingsUnsub = null
   let activeFarmId = null
 
-  // 이 기기에서 변경 이력에 표시할 이름(로그인 없이 기기별로 로컬에만 저장, 농장 데이터와 별도)
-  const actorName = ref('')
+  // 변경 이력에 남는 이름 — 로그인이 필수라서 계정의 표시 이름(없으면 이메일)을 쓴다.
+  const authStore = useAuthStore()
+  const actorName = computed(() => authStore.user?.displayName || authStore.user?.email || '')
   try {
-    actorName.value = localStorage.getItem(ACTOR_NAME_LS_KEY) || ''
+    localStorage.removeItem(ACTOR_NAME_LS_KEY)
   } catch {
     /* noop */
-  }
-
-  function setActorName(name) {
-    actorName.value = (name || '').trim()
-    try {
-      localStorage.setItem(ACTOR_NAME_LS_KEY, actorName.value)
-    } catch {
-      /* noop */
-    }
   }
 
   const today = computed(() => new Date())
@@ -389,7 +382,6 @@ export const useFarmStore = defineStore('farm', () => {
     ...inventoryActions,
     ...backupActions,
     actorName,
-    setActorName,
     logChange,
     ...revertActions,
   }

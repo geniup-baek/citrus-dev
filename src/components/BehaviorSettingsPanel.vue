@@ -1,8 +1,10 @@
 <script setup>
+import { computed } from 'vue'
 import { useFarmStore } from '../stores/farmStore'
 import { useRecommendSettingsStore } from '../stores/recommendSettingsStore'
 import { useFarmsStore } from '../stores/farmsStore'
 import { useAppPolicyStore } from '../stores/appPolicyStore'
+import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { confirm } from '../composables/useConfirm'
 import BinaryToggleCard from './BinaryToggleCard.vue'
 
@@ -10,6 +12,10 @@ const store = useFarmStore()
 const recSettingsStore = useRecommendSettingsStore()
 const farmsStore = useFarmsStore()
 const policyStore = useAppPolicyStore()
+const farmMembersStore = useFarmMembersStore()
+
+// 농장 모드에서 동작 설정 쓰기 권한이 없으면(읽기만 받은 구성원) 보기만 가능하다.
+const canEdit = computed(() => farmsStore.isAdminMode || farmMembersStore.canUse('behavior', 'write'))
 
 // ── 재배 품종(농장별) ────────────────────────────────────────────────────────
 async function toggleGrownVariety(variety) {
@@ -33,6 +39,8 @@ async function toggleGrownVariety(variety) {
 </script>
 
 <template>
+  <fieldset class="perm-fieldset" :disabled="!canEdit">
+  <p v-if="!canEdit" class="muted text-sm">동작 설정을 바꿀 권한이 없어 보기만 가능합니다.</p>
   <!-- 시스템 관리 모드: 기기/앱 전역 공통 동작 -->
   <template v-if="farmsStore.isAdminMode">
     <BinaryToggleCard
@@ -154,4 +162,8 @@ async function toggleGrownVariety(variety) {
       삭제한 변경 이력은 되돌릴 수 없습니다. 평소에는 "표시 안 함"으로 두고, 이력을 정리해야 할 때만 잠시 켜세요.
     </BinaryToggleCard>
   </template>
+  </fieldset>
 </template>
+<style scoped>
+.perm-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+</style>

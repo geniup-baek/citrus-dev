@@ -4,7 +4,7 @@ import { useFarmMembersStore } from '../stores/farmMembersStore'
 import { useFarmsStore } from '../stores/farmsStore'
 import { useAuthStore } from '../stores/authStore'
 import { deliverInviteMail, emailAutoSendEnabled } from '../services/inviteMail'
-import { PERMISSION_DOMAINS } from '../utils/farmAccess'
+import { ADMIN_FEATURES, DATA_DOMAINS, PERMISSION_DOMAINS } from '../utils/farmAccess'
 import { confirm } from '../composables/useConfirm'
 
 const farmMembersStore = useFarmMembersStore()
@@ -20,6 +20,9 @@ const DOMAIN_LABELS = {
   inventory: '재고',
   usageGuides: '사용법 자료',
   treatments: '방제/농약',
+  changeLog: '변경 이력',
+  behavior: '동작 설정',
+  backup: '저장·백업',
 }
 
 function clonePermissions(permissions) {
@@ -30,14 +33,30 @@ function clonePermissions(permissions) {
   return base
 }
 
+// 쓰기 권한은 읽기를 포함한다(규칙·화면 모두 쓰기만 있어도 읽을 수 있음) — 그래서 쓰기를 켜면
+// 읽기도 같이 켜고, 읽기를 끄면 쓰기도 같이 끈다. 화면에 "쓰기만 켜짐" 같은 모순된 상태가 안 생긴다.
+function setPerm(permissions, domain, mode, value) {
+  permissions[domain][mode] = value
+  if (mode === 'write' && value) permissions[domain].read = true
+  if (mode === 'read' && !value) permissions[domain].write = false
+}
+
+// "전체 읽기/쓰기"는 데이터 기능만 대상이다 — 설정·관리 기능(변경 이력·동작·저장백업)은 실수로
+// 한꺼번에 열리지 않도록 항상 개별로 체크해야 한다.
 function setAll(permissions, mode, value) {
-  for (const domain of PERMISSION_DOMAINS) permissions[domain][mode] = value
+  for (const domain of DATA_DOMAINS) setPerm(permissions, domain, mode, value)
+}
+
+// 이미 "쓰기만" 저장된 예전 데이터도 읽기가 켜진 것으로 보여 준다(실제로도 읽을 수 있음).
+function isChecked(permissions, domain, mode) {
+  const p = permissions?.[domain]
+  return mode === 'read' ? !!(p?.read || p?.write) : !!p?.write
 }
 
 // ── 기존 구성원 권한 수정 ────────────────────────────────────────────────────
 async function toggleMemberPermission(member, domain, mode) {
   const next = clonePermissions(member.permissions)
-  next[domain][mode] = !next[domain][mode]
+  setPerm(next, domain, mode, !isChecked(next, domain, mode))
   await farmMembersStore.updateMemberPermissions(member.uid, next)
 }
 
@@ -143,13 +162,23 @@ async function confirmRevokeInvitation(invitation) {
           </div>
         </div>
         <ul class="list clean compact permission-grid">
-          <li v-for="domain in PERMISSION_DOMAINS" :key="domain" class="permission-row">
+          <li v-for="domain in DATA_DOMAINS" :key="domain" class="permission-row">
             <span class="permission-label">{{ DOMAIN_LABELS[domain] }}</span>
             <label class="permission-check">
-              <input type="checkbox" :checked="member.permissions?.[domain]?.read" @change="toggleMemberPermission(member, domain, 'read')" /> 읽기
+              <input type="checkbox" :checked="isChecked(member.permissions, domain, 'read')" @change="toggleMemberPermission(member, domain, 'read')" /> 읽기
             </label>
             <label class="permission-check">
-              <input type="checkbox" :checked="member.permissions?.[domain]?.write" @change="toggleMemberPermission(member, domain, 'write')" /> 쓰기
+              <input type="checkbox" :checked="isChecked(member.permissions, domain, 'write')" @change="toggleMemberPermission(member, domain, 'write')" /> 쓰기
+            </label>
+          </li>
+          <li class="permission-section">설정·관리 기능</li>
+          <li v-for="domain in ADMIN_FEATURES" :key="domain" class="permission-row permission-row-admin">
+            <span class="permission-label">{{ DOMAIN_LABELS[domain] }}</span>
+            <label class="permission-check">
+              <input type="checkbox" :checked="isChecked(member.permissions, domain, 'read')" @change="toggleMemberPermission(member, domain, 'read')" /> 읽기
+            </label>
+            <label class="permission-check">
+              <input type="checkbox" :checked="isChecked(member.permissions, domain, 'write')" @change="toggleMemberPermission(member, domain, 'write')" /> 쓰기
             </label>
           </li>
         </ul>
@@ -168,13 +197,23 @@ async function confirmRevokeInvitation(invitation) {
           <input v-model="inviteEmail" type="email" autocomplete="off" placeholder="worker@example.com" />
         </label>
         <ul class="list clean compact permission-grid">
-          <li v-for="domain in PERMISSION_DOMAINS" :key="domain" class="permission-row">
+          <li v-for="domain in DATA_DOMAINS" :key="domain" class="permission-row">
             <span class="permission-label">{{ DOMAIN_LABELS[domain] }}</span>
             <label class="permission-check">
-              <input type="checkbox" v-model="invitePermissions[domain].read" /> 읽기
+              <input type="checkbox" :checked="isChecked(invitePermissions, domain, 'read')" @change="setPerm(invitePermissions, domain, 'read', $event.target.checked)" /> 읽기
             </label>
             <label class="permission-check">
-              <input type="checkbox" v-model="invitePermissions[domain].write" /> 쓰기
+              <input type="checkbox" :checked="isChecked(invitePermissions, domain, 'write')" @change="setPerm(invitePermissions, domain, 'write', $event.target.checked)" /> 쓰기
+            </label>
+          </li>
+          <li class="permission-section">설정·관리 기능</li>
+          <li v-for="domain in ADMIN_FEATURES" :key="domain" class="permission-row permission-row-admin">
+            <span class="permission-label">{{ DOMAIN_LABELS[domain] }}</span>
+            <label class="permission-check">
+              <input type="checkbox" :checked="isChecked(invitePermissions, domain, 'read')" @change="setPerm(invitePermissions, domain, 'read', $event.target.checked)" /> 읽기
+            </label>
+            <label class="permission-check">
+              <input type="checkbox" :checked="isChecked(invitePermissions, domain, 'write')" @change="setPerm(invitePermissions, domain, 'write', $event.target.checked)" /> 쓰기
             </label>
           </li>
         </ul>
@@ -237,6 +276,14 @@ async function confirmRevokeInvitation(invitation) {
   align-items: center;
   gap: 1rem;
   flex-wrap: wrap;
+}
+.permission-section {
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--line);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--muted);
 }
 .permission-label {
   min-width: 6rem;

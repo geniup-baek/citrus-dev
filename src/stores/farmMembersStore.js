@@ -6,7 +6,7 @@ import {
 import { db, firebaseEnabled } from '../services/firebase.js'
 import { useAuthStore } from './authStore.js'
 import { uuid } from '../utils/uuid.js'
-import { PERMISSION_DOMAINS, canAccessFarm, canReadFarmDomain, canWriteFarmDomain } from '../utils/farmAccess.js'
+import { PERMISSION_DOMAINS, canAccessFarm, canReadFarmDomain, canUseFeature, canWriteFarmDomain } from '../utils/farmAccess.js'
 
 const EMAIL_PATTERN = /^[^@/\s]+@[^@/\s]+\.[^@/\s]+$/
 
@@ -156,6 +156,15 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
       { uid: authStore.user?.uid, isSuperAdmin: authStore.isSuperAdmin, member: myMembership.value },
     )
   }
+  // 설정 화면 기능(changeLog/behavior/backup) 사용 권한 — 화면 단위 UI 판단.
+  function canUse(feature, mode = 'read') {
+    return canUseFeature(
+      activeFarm.value,
+      feature,
+      mode,
+      { uid: authStore.user?.uid, isSuperAdmin: authStore.isSuperAdmin, member: myMembership.value },
+    )
+  }
   function canWrite(domain) {
     return canWriteFarmDomain(
       activeFarm.value,
@@ -246,7 +255,7 @@ export const useFarmMembersStore = defineStore('farmMembers', () => {
     myFarmIds, myFarmIdsLoading, initGlobal,
     activeFarmId, isOwnerOfActiveFarm, members, myMembership, myPermissions, invitations, perFarmLoading,
     hasFullAccess, ready,
-    init, canRead, canWrite,
+    init, canRead, canWrite, canUse,
     inviteWorker, revokeInvitation, updateMemberPermissions, removeMember, claimInvitations,
     emptyPermissions,
   }

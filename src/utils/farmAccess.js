@@ -19,10 +19,18 @@ export function canAccessFarm(farm, { uid = null, isSuperAdmin = false } = {}) {
 }
 
 // 농장종사자 기능별 권한. 도메인 키는 src/utils/farmDataSchema.js의 DOMAIN_KEYS와
-// 같다(changeLog 제외 — changeLog는 별도 토글 없이 구성원이면 항상 읽고 쓸 수 있다).
+// 같다. changeLog 데이터 자체는 별도 토글 없이 구성원이면 항상 읽고 쓸 수 있다(규칙 기준).
 export const PERMISSION_DOMAINS = [
   'facilities', 'ancillaries', 'seedlings', 'tasks', 'issues', 'inventory', 'usageGuides', 'treatments',
+  // 설정 화면의 기능 권한 — 데이터 문서가 아니라 화면(탭)·버튼 단위의 UI 권한이다(firestore.rules는
+  // 이 키들을 보지 않는다). 변경 이력은 다른 도메인을 수정할 때마다 자동으로 기록이 쌓여서
+  // (logChange) 서버에서 읽기를 막으면 이력이 덮어써질 위험이 있어 화면에서만 가린다.
+  'changeLog', 'behavior', 'backup',
 ]
+
+// 설정 화면의 관리 기능(데이터 도메인과 구분해서 권한 화면에 따로 묶어 보여 준다).
+export const ADMIN_FEATURES = ['changeLog', 'behavior', 'backup']
+export const DATA_DOMAINS = PERMISSION_DOMAINS.filter((d) => !ADMIN_FEATURES.includes(d))
 
 // availablePesticide/recommendSettings 문서는 별도 토글 없이 treatments 권한을 따른다.
 export function domainKeyFor(docId) {
@@ -56,4 +64,11 @@ export const ROUTE_DOMAINS = {
   '/tasks': ['tasks'],
   '/issues': ['issues'],
   '/pesticide-recommend': ['inventory', 'treatments'],
+}
+
+// 설정 화면 기능(변경 이력·동작·저장백업) 사용 권한 — 화면 단위 UI 판단. 소유자·슈퍼관리자는 항상 허용.
+export function canUseFeature(farm, key, mode, { uid = null, isSuperAdmin = false, member = null } = {}) {
+  if (canAccessFarm(farm, { uid, isSuperAdmin })) return true
+  if (mode === 'write') return memberPermission(member, key, 'write')
+  return memberPermission(member, key, 'read') || memberPermission(member, key, 'write')
 }
