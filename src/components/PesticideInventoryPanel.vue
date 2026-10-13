@@ -50,6 +50,8 @@ function scrollToItem(slotId) {
   })
 }
 
+const props = defineProps({ focusItemId: { type: String, default: '' } })
+
 const showForm     = ref(false)
 const formMode     = ref('single') // 'single' | 'bulk'
 const editingId    = ref('')
@@ -473,6 +475,22 @@ function toggleExpand(item) {
   cancelEditTxn()
 }
 
+// 농약 추천 카드에서 넘어온 경우: 그 품목을 펼치고(입출고 패널) 화면에 보이게 스크롤한다.
+// 필터가 걸려 있어 목록에서 빠져 있을 수 있어 필터를 먼저 풀어 준다.
+watch(
+  () => props.focusItemId,
+  (id) => {
+    if (!id) return
+    const item = store.state.inventory.find((i) => i.id === id)
+    if (!item) return
+    unmatchedOnly.value = false
+    outOfStockOnly.value = false
+    if (expandedId.value !== id) toggleExpand(item)
+    nextTick(() => document.getElementById(`pest-inv-${id}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }))
+  },
+  { immediate: true },
+)
+
 function openAddTxn() {
   showAddTxn.value = true
 }
@@ -699,7 +717,7 @@ async function printReport() {
         {{ unmatchedOnly ? '미연결 품목이 없습니다.' : outOfStockOnly ? '재고 없는 품목이 없습니다.' : (showForm ? '저장하면 목록에 표시됩니다.' : '농약 재고 품목이 없습니다. 추가 버튼으로 등록하세요.') }}
       </div>
       <ul v-else class="list clean">
-        <li v-for="item in displayedItems" :key="item.id" class="list-item card-like">
+        <li v-for="item in displayedItems" :id="`pest-inv-${item.id}`" :key="item.id" class="list-item card-like">
           <div>
             <div class="task-card-top">
               <p class="item-title">{{ item.name }}</p>

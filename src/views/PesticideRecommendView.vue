@@ -22,6 +22,15 @@ const TAB_KEYS = Object.keys(TAB_DOMAINS)
 // ResourcesView.vue와 같은 얇은 탭 껍데기 패턴.
 const firstReadableTab = TAB_KEYS.find((key) => farmMembersStore.canRead(TAB_DOMAINS[key]))
 const activeTab = ref(farmMembersStore.canRead('inventory') ? 'peststock' : (firstReadableTab || 'peststock'))
+
+// 농약 추천 카드의 재고를 누르면 농약재고 탭으로 넘어가 그 품목을 펼쳐 보여준다.
+// 농약재고 읽기 권한이 없으면 재고 자체가 안 뜨지만(usePesticideInventoryStock) 여기서도 한 번 더 막는다.
+const focusItemId = ref('')
+function showStock(itemId) {
+  if (!farmMembersStore.canRead('inventory')) return
+  focusItemId.value = itemId
+  activeTab.value = 'peststock'
+}
 </script>
 
 <template>
@@ -39,9 +48,9 @@ const activeTab = ref(farmMembersStore.canRead('inventory') ? 'peststock' : (fir
       <button v-if="farmMembersStore.canRead('treatments')" class="tab-btn" :class="{ active: activeTab === 'recommend' }" @click="activeTab = 'recommend'">농약 추천</button>
     </div>
 
-    <PesticideInventoryPanel v-if="activeTab === 'peststock'" />
+    <PesticideInventoryPanel v-if="activeTab === 'peststock'" :focus-item-id="focusItemId" />
     <section v-if="activeTab === 'history'"><TreatmentHistoryPanel /></section>
-    <section v-if="activeTab === 'recommend'"><PesticideRecommendationPanel /></section>
+    <section v-if="activeTab === 'recommend'"><PesticideRecommendationPanel @show-stock="showStock" /></section>
     <AvailablePesticidePanel v-if="activeTab === 'avail'" />
     <section v-if="activeTab === 'settings'"><RecommendSettingsPanel /></section>
   </div>

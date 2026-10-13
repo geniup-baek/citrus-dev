@@ -77,10 +77,15 @@ function conflictingHistory(pesticide, treatments, conflictDays, today) {
   )
 }
 
-function yearUseCount(pesticide, treatments, year) {
+function yearUses(pesticide, treatments, year) {
   return treatments.filter(t =>
     t.brandName === pesticide.brandName && t.date?.startsWith(year),
-  ).length
+  )
+}
+
+// 올해 마지막 사용일(YYYY-MM-DD). 사용 이력이 없으면 ''.
+function lastUseDateOf(uses) {
+  return uses.reduce((latest, t) => (t.date > latest ? t.date : latest), '').slice(0, 10)
 }
 
 // 농약 정보에 등록된 최대 사용 횟수가 있으면(설정으로 우선 적용 지정 시) 그 값을, 없으면 설정값을 사용한다.
@@ -120,7 +125,9 @@ function evaluatePesticide(p, { treatments, today, harvestDate, settings, year }
   const moaReason = moaConflictReason(p, treatments, moaConflictDays, today)
   if (moaReason) reasons.push(moaReason)
 
-  const useCount = yearUseCount(p, treatments, year)
+  const uses = yearUses(p, treatments, year)
+  const useCount = uses.length
+  const lastUseDate = lastUseDateOf(uses)
   const { limit, limitLabel } = resolveMaxApplicationsLimit(p, settings)
   if (enforceMaxApplications && limit > 0 && useCount >= limit) {
     reasons.push(`올해 ${useCount}회 사용 (${limitLabel} 최대 ${limit}회)`)
@@ -139,7 +146,7 @@ function evaluatePesticide(p, { treatments, today, harvestDate, settings, year }
     reasons.push(`제외 대상 어독성등급 (${formatFishToxic(p.fishToxic)})`)
   }
 
-  return { reasons, useCount, appliedLimit: enforceMaxApplications ? limit : null }
+  return { reasons, useCount, lastUseDate, appliedLimit: enforceMaxApplications ? limit : null }
 }
 
 // ── Recommendation engine ───────────────────────────────────────────────────
@@ -151,11 +158,11 @@ export function getRecommendations({ targetPest, treatments, settings, today, ha
   const excluded = []
 
   for (const p of matched) {
-    const { reasons, useCount, appliedLimit } = evaluatePesticide(p, { treatments, today, harvestDate, settings, year })
+    const { reasons, useCount, lastUseDate, appliedLimit } = evaluatePesticide(p, { treatments, today, harvestDate, settings, year })
     if (reasons.length > 0) {
-      excluded.push({ ...p, reasons, useCount, appliedLimit })
+      excluded.push({ ...p, reasons, useCount, lastUseDate, appliedLimit })
     } else {
-      recommended.push({ ...p, useCount, appliedLimit })
+      recommended.push({ ...p, useCount, lastUseDate, appliedLimit })
     }
   }
 
